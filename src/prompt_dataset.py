@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 
 import normalize_text
-from normalize_answers import *
+from normalize_answer import *
 
 
 class QueryDataset(Dataset):
