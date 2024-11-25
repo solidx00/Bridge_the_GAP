@@ -1,0 +1,4 @@
+# Ignore environment files
+myenv
+# Ignore json files
+data\test_corpus_with_random_contriever.json
