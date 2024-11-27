@@ -88,27 +88,12 @@ def read_subset_corupus_with_map(
     corpus = read_corpus_json(corpus_path, subset_to_full_idx_map)
     return corpus, full_to_subset_idx_map
 
-#set the path for the mac or pc
-device='mac'
-
-if device == 'pc':
-    def read_test_corpus_with_random_and_contriever():
-        full_to_subset_path = r"C:\Users\franc\Documents\Bridge_the_GAP\data\mappings\full_to_subset_test_random_contriever_in_corpus.pkl"
-        subset_to_full_path = r"C:\Users\franc\Documents\Bridge_the_GAP\data\mappings\subset_to_full_test_random_contriever_in_corpus.pkl"
-        corpus_path = r"C:\Users\franc\Documents\Bridge_the_GAP\data\test_corpus_with_random_contriever.json"
-        return read_subset_corupus_with_map(
-            full_to_subset_path,
-            subset_to_full_path,
-            corpus_path
-        )
-
-elif device == 'mac': 
-    def read_test_corpus_with_random_and_contriever():
-        full_to_subset_path = "/Users/francescociteroni/Documents/Bridge_the_GAP/data/mappings/full_to_subset_test_random_contriever_in_corpus.pkl"
-        subset_to_full_path = "/Users/francescociteroni/Documents/Bridge_the_GAP/data/mappings/subset_to_full_test_random_contriever_in_corpus.pkl"
-        corpus_path = "/Users/francescociteroni/Documents/Bridge_the_GAP/data/test_corpus_with_random_contriever.json"
-        return read_subset_corupus_with_map(
-            full_to_subset_path,
-            subset_to_full_path,
-            corpus_path
-        )
+def read_test_corpus_with_random_and_contriever():
+    full_to_subset_path = r"C:\Users\franc\Documents\Bridge_the_GAP\data\mappings\full_to_subset_test_random_contriever_in_corpus.pkl"
+    subset_to_full_path = r"C:\Users\franc\Documents\Bridge_the_GAP\data\mappings\subset_to_full_test_random_contriever_in_corpus.pkl"
+    corpus_path = r"C:\Users\franc\Documents\Bridge_the_GAP\data\test_corpus_with_random_contriever.json"
+    return read_subset_corupus_with_map(
+        full_to_subset_path,
+        subset_to_full_path,
+        corpus_path
+    )
