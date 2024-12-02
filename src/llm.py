@@ -26,6 +26,7 @@ class LLM:
         model_max_length: int = 4096
     ):
         self.device = device
+        self.model_id = model_id
         self.model_max_length = model_max_length
 
         self.stop_list = stop_list
@@ -98,7 +99,7 @@ class LLM:
         return StoppingCriteriaList([StopOnTokens()])
     
     
-    def generate(self, prompt: str, max_new_tokens: int = 15) -> List[str]:
+    def generate(self, prompt: str, padding_strategy: str = "longest", max_new_tokens: int = 15) -> List[str]:
         """
         Generates text based on the given prompt.
         
@@ -108,9 +109,10 @@ class LLM:
         Returns:
             List[str]: The generated text responses.
         """
+
         inputs = self.tokenizer(
             prompt, 
-            padding=True, 
+            padding=padding_strategy, 
             truncation=True, 
             max_length=self.model_max_length, 
             return_tensors="pt"
