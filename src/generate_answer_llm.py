@@ -1,4 +1,5 @@
-import os 
+import os
+import re 
 import argparse
 import warnings
 from tqdm import tqdm
@@ -8,8 +9,9 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizer
 
-from llm import LLM
 from utils import *
+from llm import LLM
+from default_prompts import *
 from prompt_dataset import PromptDataset
 
 
@@ -19,92 +21,118 @@ warnings.filterwarnings('ignore')
 SEED=10
 
 info = {
-    "data_path": 'data/10k_train_dataset.json',
-    "random_results_path": "data/10k_random_results_at60.pkl",
-    "adore_search_results_path": "data/adore_search_results_at200.pkl",
-    "contriever_search_results_path": "data/contriever_search_results_at150.pkl",
+    "nq": {
+        "test": {
+            "data_path": r'C:\Users\franc\Documents\Bridge_the_GAP\data\test_dataset.json',
+            "contriever_search_results_path": r"C:\Users\franc\Documents\Bridge_the_GAP\data\processed\contriever_test_search_results_at150.pkl",
+        }
+    },
 }
 
+class DotDict:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
 
-def parse_arguments():
-    parser = argparse.ArgumentParser(description="Run LLM Generation.")
-    parser.add_argument('--output_dir', type=str, default='data/gen_res', help='Output directory')
-    parser.add_argument('--llm_id', type=str, default='meta-llama/Llama-2-7b-chat-hf', help='LLM model identifier')
-    parser.add_argument('--model_max_length', type=int, help='Maximum input length for the LLM model', default=4096)
-    parser.add_argument('--load_full_corpus', type=str2bool, help='Load the full corpus', default=True)    
-    parser.add_argument('--use_random', type=str2bool, help='Use random irrelevant documents')
-    parser.add_argument('--use_adore', type=str2bool, help="Use the retrieved documents from ADORE", default=False)
-    parser.add_argument('--gold_position', type=int, help='The (0-indexed) position of the gold document in the context')
-    parser.add_argument('--num_documents_in_context', type=int, help='Total number of documents in the context')
-    parser.add_argument('--get_documents_without_answer', type=str2bool, help='Select only documents without the answer (e.g., distracting)', default=True)
-    parser.add_argument('--max_new_tokens', type=int, help='Maximum number of tokens to generate', default=15)
-    parser.add_argument('--batch_size', type=int)
-    parser.add_argument('--save_every', type=int, default=250)
+def parse_arguments(custom_args=None):
+    """
+    Mimics argparse to parse arguments for LLM generation. Accepts custom arguments as a dictionary for notebooks.
+    """
+    # Define default values
+    default_args = {
+        'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\gen_res_example_llm',
+        'llm_id': 'google/gemma-2-2b-it',
+        'dataset': 'nq',
+        'model_max_length': 4096,
+        'quantization_bits': 4,
+        'use_model_chat_template': True, 
+        'gold_position': None,
+        'num_retrieved_documents': 5,
+        'use_test': True,
+        'padding_strategy': 'longest',
+        'max_new_tokens': 50,
+        'use_task_with_proof': False,
+        'batch_size': None,
+        'save_every': 250,
+    }
 
-    args = parser.parse_args()
+    # If custom_args is provided, update defaults
+    if custom_args:
+        default_args.update(custom_args)
 
-    if args.num_documents_in_context is None:
-        parser.error("'num_documents_in_context' must be specified.")
-    if args.num_documents_in_context <= 0:
-        parser.error("'num_documents_in_context' must be a positive integer.")
-    if args.gold_position is not None and (args.gold_position < 0 or args.gold_position >= args.num_documents_in_context):
-        parser.error("'gold_position' must be within the range of 'num_documents_in_context'.")
+    # Perform validation
+    if default_args['num_retrieved_documents'] is None:
+        raise ValueError("'num_retrieved_documents' must be specified.")
+    if default_args['num_retrieved_documents'] <= 0:
+        raise ValueError("'num_retrieved_documents' must be a positive integer.")
+    if default_args['gold_position'] is not None:
+        if (default_args['gold_position'] < 0 or 
+            default_args['gold_position'] >= default_args['num_retrieved_documents']):
+            raise ValueError("'gold_position' must be within the range of 'num_retrieved_documents'.")
 
-    return args
+    return DotDict(**default_args)
 
 
 def load_corpus(
     args: argparse.Namespace
 ) -> Tuple[List[Dict], Optional[Dict[int, int]]]:
-    # Load the corpus
-    if args.load_full_corpus:
-        corpus = read_corpus_json('data/corpus.json')
-        return corpus, None
-
-    if args.use_random:
-        corpus, full_to_subset_idx_map = read_corpus_with_random()
-    elif args.use_adore:
-        corpus, full_to_subset_idx_map = read_corpus_with_adore()
-    else: 
-        # Corpus with documents from Contriever
-        corpus, full_to_subset_idx_map = read_corpus_with_contriever()
+    
+    # Corpus with documents from Contriever
+    corpus, full_to_subset_idx_map = read_test_corpus_with_random_and_contriever()
 
     return corpus, full_to_subset_idx_map
 
-
 def load_search_results(args: argparse.Namespace) -> List[Tuple[List[int], List[float]]]:
-    # Decide on search results path based on conditions
-    if args.use_random:
-        search_results_path = info['random_results_path']
-    elif args.use_adore:
-        search_results_path = info['adore_search_results_path']
-    else:
-        # Search results from Contriever
-        search_results_path = info['contriever_search_results_path'] 
+    # Search results from Contriever
+    search_results_path = info['nq']['test']['contriever_search_results_path'] 
 
     search_results = read_pickle(search_results_path)
     return search_results
+
+
+def get_prompt_template(args: argparse.Namespace):
+    prompt_configuration = args.dataset
+
+    if args.use_model_chat_template:
+        chat_task_template_str = chat_task_templates[args.llm_id]['template']
+        
+        task_instruction = task_instructions[prompt_configuration]
+        if args.use_task_with_proof:
+            task_instruction = task_instructions['qa_proof'][prompt_configuration]
+
+        prompt_template = apply_chat_task_template(chat_task_template_str, task_instruction)
+    else:
+        task_template = task_templates[prompt_configuration]
+
+        if args.use_task_with_proof:
+            task_template = task_templates['qa_proof'][prompt_configuration]
+
+        prompt_template = task_template.create_prompt_template()
+
+    return prompt_template
 
 
 def initialize_dataset_and_loader(
     args: argparse.Namespace, 
     corpus: List[Dict], 
     full_to_subset_idx_map: Optional[Dict[int, int]], 
-    search_results: List[Tuple[List[int], List[float]]], 
+    retriever_search_results: List[Tuple[List[int], List[float]]], 
     tokenizer: PreTrainedTokenizer
 ) -> DataLoader:
     
+    prompt_template = get_prompt_template(args)
+    
     prompt_ds = PromptDataset(
-        corpus=corpus, data_path=info['data_path'], 
+        corpus=corpus, data_path=info[args.dataset]['test']['data_path'], 
         tokenizer=tokenizer, 
         max_tokenized_length=args.model_max_length - 2, 
-        search_results=search_results,
+        search_results=retriever_search_results,
+        prompt_template=prompt_template,
         full_to_subset_idx_map=full_to_subset_idx_map,
         do_normalize_query=True, 
-        num_documents_in_context=args.num_documents_in_context,
-        gold_position=args.gold_position,
-        get_documents_without_answer=args.get_documents_without_answer,
+        num_documents_in_context=args.num_retrieved_documents,
+        gold_position=args.gold_position, # None in these experiments
     )
+        
     prompt_dataloader = DataLoader(
         prompt_ds,
         batch_size=args.batch_size,
@@ -116,16 +144,49 @@ def initialize_dataset_and_loader(
 
 
 def print_info(args: argparse.Namespace):
-    print("INFO:")
-    print(f"DATA: {info['data_path']}")
+    print("INFO:")    
+    print(f"DATA: {info[args.dataset]['test']['data_path']}")
+    print(f"USE TEST: {args.use_test}")
     print(f"MODEL: {args.llm_id}")
-    print(f"USE RANDOM IN CONTEXT: {args.use_random}")
-    print(f"USE ADORE: {args.use_adore}")
+    print(f"MODEL MAX LENGTH: {args.model_max_length}")
+    print(f'MAX NEW TOKENS: {args.max_new_tokens}')
+    print(f"USE MODEL CHAT TEMPLATE: {args.use_model_chat_template}")
+    print(f"TASK WITH PROOF:", args.use_task_with_proof)
     print(f"GOLD POSITION: {args.gold_position}")
-    print(f"NUM DOCUMENTS IN CONTEXT: {args.num_documents_in_context}")
-    print(f"DOCUMENTS WITHOUT ANSWER: {args.get_documents_without_answer}")
+    print(f"NUM DOCUMENTS IN CONTEXT: {args.num_retrieved_documents}")
     print(f"BATCH SIZE: {args.batch_size}")
     print(f"SAVE EVERY: {args.save_every}")
+
+
+def extract_generate_answers(
+    args: argparse.Namespace, 
+    generated_output: List[str]
+) -> List[str]:
+    answer_prefix = "Answer:"
+    if args.use_model_chat_template:
+        #answer_prefix = re.escape(chat_task_templates[args.llm_id]['answer_prefix'])
+
+        answer_prefix = re.escape("Answer:") + r"\nmodel"  #adjust this
+
+
+    generated_answers = []
+    for output in generated_output:
+        matches = list(re.finditer(answer_prefix, output))
+
+        match_idx = 0
+
+        # When using the proof there is a one-shot example that already 
+        # contains the string "Answer:". Thus, we should get the second (match_idx=1) match.
+        if args.use_task_with_proof:
+            match_idx = 1
+            if args.use_model_chat_template and answer_prefix != "Answer:":
+                match_idx = 0
+ 
+        answer_end = matches[match_idx].end()
+        response = output[answer_end:].strip()
+        generated_answers.append(response)
+    
+    return generated_answers
 
 
 def generate_and_save(
@@ -135,40 +196,34 @@ def generate_and_save(
 ):
     # Info from arguments
     llm_id = args.llm_id
-    num_doc = args.num_documents_in_context
+    num_doc = args.num_retrieved_documents
     save_every = args.save_every
-    gold_pos = args.gold_position
-    retriever_str = "adore" if args.use_adore else "contriever"
-    rand_str = "_rand" if args.use_random else ""
-    answerless_str = "_answerless" if args.get_documents_without_answer else ""
+    retriever_str = "contriever"
+    padding_str = f"_{args.padding_strategy}{args.model_max_length}" if args.padding_strategy != "longest" else "" 
+    chat_template_str = "_template" if args.use_model_chat_template else ""
+    prompt_type = "retrieved_proof" if args.use_task_with_proof else "retrieved"
 
     # Create the saving directory
     llm_folder = llm_id.split("/")[1] if '/' in llm_id else llm_id
-    saving_dir = f"{args.output_dir}/{llm_folder}/train/classic/{retriever_str}/{num_doc}_doc"
-    if not os.path.exists(saving_dir):
-        os.makedirs(saving_dir)
-
-    
-    # MPT has a different answer string in the prompt
-    answer_string_in_prompt = "### Response:" if 'mpt' in llm_id else "Answer:"
+    saving_dir = f"{args.output_dir}/{args.dataset}/{llm_folder}/test/{prompt_type}/{retriever_str}/{num_doc}_doc"
+    os.makedirs(saving_dir, exist_ok=True)
 
     all_info = []  
     for idx, prompt_batch in enumerate(tqdm(prompt_dataloader)):
         prompts = prompt_batch['prompt']
-        generated_output = llm.generate(prompts, max_new_tokens=args.max_new_tokens)
-        
-        generated_answers = []
-        for output in generated_output:
-            start = output.find(answer_string_in_prompt) + len(answer_string_in_prompt)
-            response = output[start:].strip()
-            generated_answers.append(response)
+        generated_output = llm.generate(
+            prompts,
+            padding_strategy=args.padding_strategy, 
+            max_new_tokens=args.max_new_tokens
+        )
 
+        generated_answers = extract_generate_answers(args, generated_output)
         prompt_batch['generated_answer'] = generated_answers
         all_info.append(prompt_batch)
         
         if (idx + 1) % save_every == 0 or (idx + 1) == len(prompt_dataloader):
             print(f"Saving at {idx + 1}...")
-            file_name = f"{saving_dir}/numdoc{num_doc}_gold_at{gold_pos}{rand_str}{answerless_str}_info_{idx+1}.pkl"
+            file_name = f"{saving_dir}/numdoc{num_doc}_retr{args.num_retrieved_documents}{padding_str}{chat_template_str}_info_{idx+1}.pkl"
             write_pickle(all_info, file_name)
             all_info = []
 
@@ -179,7 +234,8 @@ def main():
     print("Loading LLM...")
     llm_id = args.llm_id
     llm = LLM(
-        llm_id, device, quantization_bits=4, 
+        llm_id, device, 
+        quantization_bits=args.quantization_bits, 
         model_max_length=args.model_max_length
     )
     tokenizer = llm.tokenizer
@@ -188,13 +244,14 @@ def main():
 
     print("Loading corpus and search results...")
     corpus, full_to_subset_idx_map = load_corpus(args)
-    search_results = load_search_results(args)
+    retriever_search_results = load_search_results(args)
     print("Corpus and search results loaded")
 
 
     print("Loading prompt dataset...")
     prompt_dataloader = initialize_dataset_and_loader(
-        args, corpus, full_to_subset_idx_map, search_results, tokenizer
+        args, corpus, full_to_subset_idx_map, 
+        retriever_search_results, tokenizer
     )
     print("Prompt dataset loaded")
 
