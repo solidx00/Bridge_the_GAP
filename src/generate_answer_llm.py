@@ -82,16 +82,15 @@ def load_corpus(
     return corpus, full_to_subset_idx_map
 
 def load_search_results(args: argparse.Namespace) -> List[Tuple[List[int], List[float]]]:
-    # Search results from Contriever
-    search_results_path = info['nq']['test']['contriever_search_results_path'] 
 
-    search_results = read_pickle(search_results_path)
-    return search_results
+    search_results_path = info[args.dataset][args.split]['contriever_search_results_path']
+    retriever_search_results = read_pickle(search_results_path)
+
+    return retriever_search_results
 
 
 def get_prompt_template(args: argparse.Namespace):
     prompt_configuration = args.dataset
-
     if args.use_model_chat_template:
         chat_task_template_str = chat_task_templates[args.llm_id]['template']
         
@@ -122,7 +121,7 @@ def initialize_dataset_and_loader(
     prompt_template = get_prompt_template(args)
     
     prompt_ds = PromptDataset(
-        corpus=corpus, data_path=info[args.dataset]['test']['data_path'], 
+        corpus=corpus, data_path=info[args.dataset][args.split]['data_path'], 
         tokenizer=tokenizer, 
         max_tokenized_length=args.model_max_length - 2, 
         search_results=retriever_search_results,
@@ -164,15 +163,11 @@ def extract_generate_answers(
 ) -> List[str]:
     answer_prefix = "Answer:"
     if args.use_model_chat_template:
-        #answer_prefix = re.escape(chat_task_templates[args.llm_id]['answer_prefix'])
-
-        answer_prefix = re.escape("Answer:") + r"\nmodel"  #adjust this
-
+        answer_prefix = re.escape(chat_task_templates[args.llm_id]['answer_prefix'])
 
     generated_answers = []
     for output in generated_output:
         matches = list(re.finditer(answer_prefix, output))
-
         match_idx = 0
 
         # When using the proof there is a one-shot example that already 
@@ -205,7 +200,7 @@ def generate_and_save(
 
     # Create the saving directory
     llm_folder = llm_id.split("/")[1] if '/' in llm_id else llm_id
-    saving_dir = f"{args.output_dir}/{args.dataset}/{llm_folder}/test/{prompt_type}/{retriever_str}/{num_doc}_doc"
+    saving_dir = f"{args.output_dir}/{args.dataset}/{llm_folder}/{args.split}/{prompt_type}/{retriever_str}/{num_doc}_doc"
     os.makedirs(saving_dir, exist_ok=True)
 
     all_info = []  
@@ -230,6 +225,8 @@ def generate_and_save(
 
 def main():
     args = parse_arguments()
+
+    args.split = "test" if args.use_test else "train"
 
     print("Loading LLM...")
     llm_id = args.llm_id
