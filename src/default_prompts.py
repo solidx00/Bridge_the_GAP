@@ -1,7 +1,7 @@
 from langchain_core.prompts import PromptTemplate
 
 class TaskTemplate:
-    def __init__(self, instruction, query_last=True, query_word="Question"):
+    def __init__(self, instruction, query_last=False, query_word="Question"):
         self.instruction = instruction
         self.query_last = query_last
         self.query_word = query_word
@@ -52,9 +52,10 @@ def apply_chat_task_template(
 task_instructions = {
     "query_only": "You are given a question and you must respond based on your internal knowledge. You must always provide an answer.",
     "nq": "You are given a question and you must respond based on the provided documents. You must always provide an answer.",
+    "nq_bgm": "Output only the document IDs relevant to the query. Use this format: [ID1, ID2, ...].",
     "qa_proof": { 
         "nq": "You are given a question and you must respond based on the provided documents. You must always provide an answer. If none of the documents contain the answer, respond with NO-RES. In addition, you must report the portion of the document (Proof) containing the answer.\nSTART example\nDocument [20970787](Title: Ancient Egyptian technology) Evidence indicates that Egyptians made use of potter 's wheels in the manufacturing of pottery from as early as the 4th Dynasty . Chariots , however , are only believed to have been introduced by the invasion of the Hyksos in the Second Intermediate period ; during the New Kingdom era , chariotry became central to Egypt 's military .\nQuestion: when was the potter's wheel first used in egypt\nAnswer: 4th Dynasty\nProof: Evidence indicates that Egyptians made use of potter 's wheels in the manufacturing of pottery from as early as the 4th Dynasty .\nEND example\n", 
-
+    
     },
     
 }
@@ -63,6 +64,7 @@ task_instructions = {
 task_templates = {
     "query_only": QueryOnlyTaskTemplate(task_instructions['query_only']),
     "nq": TaskTemplate(task_instructions['nq']),
+    "nq_bgm": TaskTemplate(task_instructions['nq_bgm']),
     "qa_proof": {
         "nq": TaskTemplate(task_instructions['qa_proof']['nq']),
     },
