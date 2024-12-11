@@ -14,7 +14,6 @@ from llm import LLM
 from default_prompts import *
 from prompt_dataset import PromptDataset
 
-
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
 warnings.filterwarnings('ignore')

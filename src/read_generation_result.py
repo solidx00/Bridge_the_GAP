@@ -46,90 +46,88 @@ def read_generation_results(file_path: str, df: pd.DataFrame) -> List[Dict]:
     with open(file_path, "r") as fin:
         file_data = json.load(fin)
 
-        for example in file_data:
-            example_ids = example['example_id']
-            queries = example['query']
-            prompts = example['prompt']
-            document_indices = list(zip(*example['document_indices']))
-            gold_document_indices = example['gold_document_idx']
-            generated_answers = example['generated_answer']
-            prompt_tokens_lens = example['prompt_tokens_len']
+        # Handle list-based or dict-based structures
+        if isinstance(file_data, list):
+            examples = file_data
+        else:
+            examples = [file_data]  # Wrap single dictionary in a list for consistency
 
-            for i in range(len(example_ids)):
-                example_id = example_ids[i]
-                query = queries[i]
-                gold_document_idx = gold_document_indices[i]
-                documents_idx = list(document_indices[i])
-                # After the first new line, LLMs usually generate random text,
-                # so it is skipped in the matching comparison
-                generated_answer = generated_answers[i].split('\n', 1)[0]
-                
-                prompt = prompts[i]
-                prompt_tokens_len = prompt_tokens_lens[i]
+        for example in examples:
+            example_id = example.get('example_id', [])
+            query = example.get('query', [])
+            prompt = example.get('prompt', [])
+            document_indices = example.get('document_indices', [])
+            gold_document_idx = example.get('gold_document_idx', [])
+            generated_answer = example.get('generated_answer', [])
+            prompt_tokens_len = example.get('prompt_tokens_len', [])
 
-                answers = df[df['example_id'].astype(str) == str(example_id)].answers.iloc[0]
-                gold_in_retrieved = False
+            documents_idx = list(document_indices) if isinstance(document_indices, list) else [document_indices]
+            generated_answer = generated_answer[0].split('\n', 1)[0]
+            filtered_df = df[df['example_id'].astype(str) == str(example_id)]
+            if filtered_df.empty:
+                print(f"Warning: No matching entry found for example_id {example_id}")
+                answers = None
+            else:
+                answers = filtered_df.answers.iloc[0]
 
-                if int(gold_document_idx) in map(int, documents_idx):
-                    gold_in_retrieved = True
+            gold_in_retrieved = int(gold_document_idx) in map(int, documents_idx)
+            ans_match_after_norm = are_answers_matching(generated_answer, answers) if answers else False
+            ans_in_documents = is_answer_in_text(prompt, answers) if answers else False
 
-                ans_match_after_norm: bool = are_answers_matching(generated_answer, answers)
-                ans_in_documents: bool = is_answer_in_text(prompt, answers)
-                data.append({
-                    'example_id': str(example_id),
-                    'query': query,
-                    'prompt': prompt,
-                    'document_indices': documents_idx,
-                    'gold_document_idx': gold_document_idx,
-                    'generated_answer': generated_answers[i],
-                    'answers': answers,
-                    'ans_match_after_norm': ans_match_after_norm,
-                    'gold_in_retrieved': gold_in_retrieved,
-                    'ans_in_documents': ans_in_documents,
-                    "prompt_tokens_len": prompt_tokens_len,
-                })
+            data.append({
+                'example_id': str(example_id),
+                'query': query,
+                'prompt': prompt,
+                'document_indices': documents_idx,
+                'gold_document_idx': gold_document_idx,
+                'generated_answer': generated_answer,
+                'answers': answers,
+                'ans_match_after_norm': ans_match_after_norm,
+                'gold_in_retrieved': gold_in_retrieved,
+                'ans_in_documents': ans_in_documents,
+                "prompt_tokens_len": prompt_tokens_len,
+            })
 
-                if 'proof' in file_path:
-                    proof = extract_proof_from_text(generated_answers[i]) 
-                    data[-1]['proof'] = proof
-                    data[-1]['ans_in_proof'] = is_answer_in_text(proof, [generated_answer])
+            if 'proof' in file_path:
+                proof = extract_proof_from_text(generated_answer)
+                data[-1]['proof'] = proof
+                data[-1]['ans_in_proof'] = is_answer_in_text(proof, [generated_answer])
 
     return data
-
 
 def read_generation_results_only_query(file_path: str, df: pd.DataFrame) -> List[Dict]:
     data = []
     with open(file_path, "r") as fin:
         file_data = json.load(fin)
 
-        for example in file_data:
-            example_ids = example['example_id']
-            queries = example['query']
-            prompts = example['prompt']
-            generated_answers = example['generated_answer']
+        # Handle list-based or dict-based structures
+        if isinstance(file_data, list):
+            examples = file_data
+        else:
+            examples = [file_data]  # Wrap single dictionary in a list for consistency
+        
+        for example in examples:
+            example_id = example.get('example_id', [])
+            query = example.get('query', [])
+            prompt = example.get('prompt', [])
+            generated_answer = example.get('generated_answer', [])
 
-            for i in range(len(example_ids)):
-                example_id = example_ids[i]
-                query = queries[i]
-                # After the first new line, LLMs usually generate random text,
-                # so it is skipped in the matching comparison
-                generated_answer = generated_answers[i].split('\n', 1)[0]
-                prompt = prompts[i]
+            generated_answer = generated_answer[0].split('\n', 1)[0]
+            
+            answers = df[df['example_id'].astype(str) == str(example_id)].answers.iloc[0]
 
-                answers = df[df['example_id'].astype(str) == str(example_id)].answers.iloc[0]
+            ans_match_after_norm: bool = are_answers_matching(generated_answer, answers)
+            ans_in_documents: bool = is_answer_in_text(prompt, answers)
 
-                ans_match_after_norm: bool = are_answers_matching(generated_answer, answers)
-                ans_in_documents: bool = is_answer_in_text(prompt, answers)
-                data.append({
+            data.append({
                     'example_id': str(example_id),
                     'query': query,
                     'prompt': prompt,
-                    'generated_answer': generated_answers[i],
+                    'generated_answer': generated_answer,
                     'answers': answers,
                     'ans_match_after_norm': ans_match_after_norm,
                     'ans_in_documents': ans_in_documents,
-                })
-
+                })        
     return data
 
 
@@ -163,6 +161,7 @@ def load_pickle_files(directory: str, filename_prefix: str) -> pd.DataFrame:
     if 'only_query' in directory:
         if data_df['example_id'].dtype != "O":
             data_df['example_id'] = data_df['example_id'].apply(lambda x: x.tolist())
+    
     '''
     else:
         print(type(data_df['document_indices'].values))
@@ -172,7 +171,9 @@ def load_pickle_files(directory: str, filename_prefix: str) -> pd.DataFrame:
 
     if 'prompt_tokens_len' in data_df.columns:
         data_df['prompt_tokens_len'] = data_df['prompt_tokens_len'].apply(lambda x: x.tolist())
+
     '''
+        
     return data_df
 
 
@@ -232,7 +233,7 @@ def parse_arguments(custom_args=None):
         'model_max_length': 4096,
         'use_model_chat_template': True, 
         'gold_position': None,
-        'num_retrieved_documents': 5,
+        'num_retrieved_documents': 4,
         'use_test': True,
         'padding_strategy': 'longest',
         'max_new_tokens': 50,
@@ -258,10 +259,14 @@ info = {
 
 def main():
     args = parse_arguments()
-    
-    retriever_str = "contriever/"
 
     prompt_type = args.prompt_type
+    
+    if prompt_type == 'only_query':
+        retriever_str=""
+    else: 
+        retriever_str = "contriever/"
+
     if 'retrieved' in prompt_type:    
         args.num_doc = args.num_retrieved_documents
         filename_prefix = get_retrieved_path(args)
