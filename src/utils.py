@@ -98,3 +98,13 @@ def read_test_corpus_with_random_and_contriever():
         subset_to_full_path,
         corpus_path
     )
+
+def read_corpus_with_contriever():
+    full_to_subset_path = r"C:\Users\franc\Documents\Bridge_the_GAP\data\mappings\full_to_subset_contriever_at150_in_corpus.pkl"
+    subset_to_full_path = r"C:\Users\franc\Documents\Bridge_the_GAP\data\mappings\subset_to_full_contriever_at150_in_corpus.pkl"
+    corpus_path = r"C:\Users\franc\Documents\Bridge_the_GAP\data\corpus_with_contriever_at150.json"
+    return read_subset_corpus_with_map(
+        full_to_subset_path,
+        subset_to_full_path,
+        corpus_path
+    )
