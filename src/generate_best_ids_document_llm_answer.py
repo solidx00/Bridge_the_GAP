@@ -18,7 +18,7 @@ from prompt_dataset import PromptDataset
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
 warnings.filterwarnings('ignore')
 SEED=10
 
@@ -73,7 +73,7 @@ def parse_arguments(custom_args=None):
     """
     # Define default values
     default_args = {
-        'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\gen_id_document_bgm',
+        'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\gen_ids_document_training_set_bgm',
         'llm_id': 'google/gemma-2-2b-it',
         'dataset': 'nq_training',
         'model_max_length': 4096,
@@ -218,29 +218,31 @@ def are_answers_matching(prediction: str, ground_truths: List[str]) -> float:
             return True
     return False
 
-
-def calculate_bleu(generated_answer, reference_answers):
+def calculate_bleu(model_answer, correct_answers):
     """
-    Calcola il BLEU score di una risposta generata rispetto a una lista di risposte corrette.
+    Calculate the maximum BLEU score between a model's answer and a list of correct answers.
 
-    Args:
-        generated_answer (str): La risposta generata dal modello.
-        reference_answers (list): Lista di risposte corrette (ogni elemento è una stringa).
+    Parameters:
+        correct_answers (list of str): A list of correct answers.
+        model_answer (str): The model's generated response.
 
     Returns:
-        float: Il valore del BLEU score.
+        float: The highest BLEU score among the comparisons.
     """
-    # Tokenizza la risposta generata
-    generated_tokens = generated_answer.split()
-    
-    # Tokenizza le risposte di riferimento
-    reference_tokens = [ref.split() for ref in reference_answers]
-    
-    # Calcolo del BLEU con un smoothing per gestire casi senza corrispondenze
+    # Tokenize the model's answer
+    model_answer_tokens = model_answer.split()
+
+    # Initialize smoothing function to avoid zero scores for short sequences
     smoothing_function = SmoothingFunction().method1
-    bleu_score = sentence_bleu(reference_tokens, generated_tokens, smoothing_function=smoothing_function)
-    
-    return bleu_score
+
+    # Calculate BLEU scores for each correct answer
+    bleu_scores = [
+        sentence_bleu([correct_answer.split()], model_answer_tokens, smoothing_function=smoothing_function)
+        for correct_answer in correct_answers
+    ]
+
+    # Return the highest BLEU score
+    return max(bleu_scores)
 
 def evaluate_accuracy(args: argparse.Namespace, llm, candidate_prompt, answers: List[str], max_new_tokens=50):
     """
@@ -260,7 +262,9 @@ def generate_and_save(
     llm: LLM,
     prompt_ds: PromptDataset,
     df: pd.DataFrame,
-    prompt_dataloader: DataLoader
+    prompt_dataloader: DataLoader,
+    start_example: int = 1500,
+    max_examples: int = 3000  
 ):
     # Info from arguments
     max_new_tokens=args.max_new_tokens
@@ -278,10 +282,12 @@ def generate_and_save(
     saving_dir = f"{args.output_dir}/{args.dataset}/{llm_folder}/{args.split}/{prompt_type}/{retriever_str}/{num_doc}_doc"
     os.makedirs(saving_dir, exist_ok=True)
 
-    ### ALGORITMO DI GENERAZIONE ###
-    max_examples = 3000 
+    ### ALGORITMO DI GENERAZIONE ### 
     all_info = [] 
     for idx, prompt_batch in enumerate(tqdm(prompt_dataloader)):
+
+        if idx < start_example:
+            continue
 
         if idx >= max_examples:
             break
@@ -291,9 +297,9 @@ def generate_and_save(
         query = prompt_batch['query']
         document_indices=prompt_batch['document_indices']
 
-        #estraggo la lista di answers per quell'esempio
         answers = df[df['example_id'].astype(str) == str(example_id)].answers.iloc[0]
 
+        
         # Informazioni da salvare
         query_info = {
             "query": query,
@@ -311,27 +317,62 @@ def generate_and_save(
         best_candidate_are_answer = False  # Mantieni il punteggio corrente come riferimento
         best_candidate_score = 0
         
+        evaluated_no_document_case = False
+
         while True: 
+            # Valuta il caso in cui non ci sono documenti nel contesto
+            if not evaluated_no_document_case:
+                evaluated_no_document_case = True
+        
+                # Crea il prompt senza documenti
+                candidate_prompt = prompts
+                if '\nAnswer:' not in candidate_prompt:
+                    candidate_prompt += '\nAnswer:'
+        
+                # Verifica se la risposta matcha con quella corretta dell'esempio in questione
+                cur_are_answer, generated_answer = evaluate_accuracy(args, llm, candidate_prompt, answers, max_new_tokens)
+
+                cur_score = calculate_bleu(generated_answer, answers)
+
+                # Salva i dettagli della generazione
+                query_info["generated_responses"].append({
+                    "candidate_documents": [],
+                    "generated_answer": generated_answer,
+                    "is_correct": cur_are_answer,
+                    "bleu_score": cur_score
+                })
+
+                # Aggiorna il miglior candidato se il punteggio migliora
+                if cur_are_answer == True: 
+                    best_candidate = None  # Non c'è un documento specifico
+                    best_candidate_are_answer = cur_are_answer
+                    best_candidate_score = cur_score
+
+                    # Aggiorna la sequenza di documenti selezionati
+                    d_silv = []
+                    d_silv_are_answer = cur_are_answer
+                    d_silv_score = cur_score
+                
+                '''
+                print(f'Documenti in d_silv: {d_silv}')
+                print(f'Prompt corrente senza documenti: {candidate_prompt}')
+                print(f'Le risposte corrette sono{answers}')
+                print(f'Risposta generata dal modello senza documenti: {generated_answer}')
+                print(f"La risposta generata senza documenti e' corretta?: {best_candidate_are_answer}")
+                print(f"La risposta senza documenti ha questa accuracy: {best_candidate_score}")
+                '''
+
             # Valuta i documenti non ancora selezionati
             for doc_idx in document_indices:
+
                 if doc_idx in d_silv:
                     continue  # Salta i documenti già selezionati
 
                 # Crea un candidato aggiungendo il documento alla sequenza corrente
                 candidate_docs = d_silv + [doc_idx]
-                
-                #print(f'Documenti in d_silv: {d_silv}')
 
-                #print(f'Documenti candidati: {candidate_docs}')
+                formatted_docs, _ = prompt_ds._get_documents_from_indices(candidate_docs)
 
-                # Salta la funzione `_get_documents_from_indices` se non ci sono documenti
-                if not candidate_docs:
-                    formatted_docs = []
-
-                else: 
-                    formatted_docs, _ = prompt_ds._get_documents_from_indices(candidate_docs)
-
-                # Crea il prompt candidato
                 candidate_prompt = prompts
                 # Aggiungi i documenti solo se non sono vuoti
                 if formatted_docs:
@@ -340,17 +381,19 @@ def generate_and_save(
                 if '\nAnswer:' not in candidate_prompt:
                     candidate_prompt += '\nAnswer:'
 
-                #print(f'Prompt corrente: {candidate_prompt}')
-
-                # Verifica se la risposta matcha con quella corretta dell'esempio in questione
                 cur_are_answer, generated_answer = evaluate_accuracy(args, llm, candidate_prompt, answers, max_new_tokens)
 
-                #print(f'Le risposte corrette sono{answers}')
-                #print(f"Ce' la risposta in quella generata dal modello? : {cur_are_answer}")
-                
+                '''
+                print(f'Documenti in d_silv: {d_silv}')
+                print(f'Documenti candidati: {candidate_docs}')
+                print(f'Prompt corrente: {candidate_prompt}')
+                print(f'Le risposte corrette sono{answers}')
+                print(f'Risposta generata dal modello: {generated_answer}')
+                print(f"Ce' la risposta corretta in quella generata dal modello? : {cur_are_answer}")
+                '''
+
                 cur_score = calculate_bleu(generated_answer, answers)
 
-                # Salva i dettagli della generazione
                 query_info["generated_responses"].append({
                     "candidate_documents": candidate_docs,
                     "generated_answer": generated_answer,
@@ -404,15 +447,14 @@ def generate_and_save(
         # Aggiorna i documenti selezionati finali
         query_info["selected_documents"] = d_silv
 
-        # Aggiungi le informazioni del batch corrente a `all_info`
         all_info.append(query_info)
             
-
+        
         if (idx + 1) % save_every == 0 or (idx + 1) == len(prompt_dataloader):
             print(f"Saving at {idx + 1}...")
             file_name = f"{saving_dir}/numdoc{num_doc}_retr{args.num_retrieved_documents}{chat_template_str}_info_{idx+1}.pkl"
             write_pickle(all_info, file_name)
-            all_info = [] 
+            all_info = []
             
 
 
@@ -451,7 +493,7 @@ def main():
     #output_json_path = r'C:\Users\franc\Documents\Bridge_the_GAP\data\dataloader_contents.json'
     #save_dataloader_to_json(prompt_dataloader, output_json_path, num_examples=15)
         
-    generate_and_save(args, llm, prompt_ds, df, prompt_dataloader)
+    generate_and_save(args, llm, prompt_ds, df, prompt_dataloader, 1500, 3000)
 
 
 
