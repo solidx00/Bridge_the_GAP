@@ -26,7 +26,7 @@ class TrainingTaskTemplate:
         self.setup_template()
 
     def setup_template(self):
-        prompt_str = self.query_word + ": {query}\nDocuments:\n" # '{context}\nAnswer:' Da aggiungere in fase di generazione nell'algoritmo
+        prompt_str = self.query_word + ": {query}\nDocuments:\n"
 
         self.prompt_template_str += prompt_str
 
@@ -80,7 +80,7 @@ task_instructions = {
 task_templates = {
     "query_only": QueryOnlyTaskTemplate(task_instructions['query_only']),
     "nq": TaskTemplate(task_instructions['nq']),
-    "nq_bgm": TaskTemplate(task_instructions['nq_bgm']),
+    "nq_bgm": TrainingTaskTemplate(task_instructions['nq_bgm']),
     "nq_training": TrainingTaskTemplate(task_instructions['nq_training']),
     "qa_proof": {
         "nq": TaskTemplate(task_instructions['qa_proof']['nq']),

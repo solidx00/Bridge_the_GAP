@@ -71,11 +71,9 @@ def process_pkl_files(input_folder):
 
         count_example += 1
 
-    # Salva i dati combinati in un file JSON
     with open(output_file, 'w') as f:
         json.dump(combined_data, f, indent=4)
 
-    # Salva i dati filtrati in un file JSON
     with open(filtered_output_file, 'w') as f:
         json.dump(filtered_data, f, indent=4)
 

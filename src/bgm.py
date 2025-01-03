@@ -18,7 +18,6 @@ class BGM:
         self.device = device
         self.model_max_length = model_max_length
 
-        # Initialize the seq2seq model and tokenizer
         self.model, self.tokenizer = self._initialize_model_tokenizer(model_id)
 
     def _initialize_model_tokenizer(self, model_id: str) -> Tuple[AutoModelForSeq2SeqLM, AutoTokenizer]:
@@ -34,7 +33,7 @@ class BGM:
             config=model_config,
             torch_dtype=torch.bfloat16,
         ).to(self.device)
-        model.eval()  # Set the model to evaluation mode
+        model.eval()
 
         tokenizer = AutoTokenizer.from_pretrained(
             model_id, 
@@ -49,12 +48,11 @@ class BGM:
     def generate(
         self, 
         prompt: str, 
-        max_new_tokens: int = 50
+        max_new_tokens: int = 30
     ) -> List[str]:
         """
         Generates the ordered document IDs based on the query and documents.
         """
-        # Tokenize input
         inputs = self.tokenizer(
             prompt, 
             return_tensors="pt", 
@@ -63,14 +61,12 @@ class BGM:
             truncation=True
         ).to(self.device)
 
-        # Generate output
         generated_ids = self.model.generate(
             **inputs,
-            do_sample=False,  # Deterministic output
+            do_sample=False,
             max_new_tokens=max_new_tokens,
             repetition_penalty=1.1,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
         )
-        # Decode output
         return self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
