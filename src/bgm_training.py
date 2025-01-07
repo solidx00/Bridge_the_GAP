@@ -1,10 +1,14 @@
 import json
 from utils import *
 import warnings
+from tqdm import tqdm
 from bgm_prompt_dataset import BGMPromptDataset
 from bgm import BGM
+from peft import LoftQConfig,LoraConfig, get_peft_model
+from transformers import AdamW
 from torch.utils.data import DataLoader, Dataset
 from transformers import PreTrainedTokenizer
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoConfig
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
@@ -28,14 +32,14 @@ def parse_arguments(custom_args=None):
     """
     Mimics argparse to parse arguments for LLM generation. Accepts custom arguments as a dictionary for notebooks.
     """
-    # Define default values
+
     default_args = {
-        'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\gen_res_example_llm',
+        'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\lora_training_bgm\lora-checkpoint',
         'llm_id': 'google-t5/t5-base',
         'dataset': 'nq',
         'model_max_length': 4096,
         'quantization_bits': 4,
-        'task_instruction' : "Output only the document IDs relevant to the query. Use this format: [ID1, ID2, ...].",
+        'task_instruction' : "Output only the document IDs relevant to the query. Use this format: [Id_1, Id_2, ...].",
         'use_test': False,
         'padding_strategy': 'longest',
         'max_new_tokens': 15,
@@ -43,17 +47,26 @@ def parse_arguments(custom_args=None):
         'save_every': 250,
     }
 
-    # If custom_args is provided, update defaults
     if custom_args:
         default_args.update(custom_args)
 
     return DotDict(**default_args)
 
+def print_info(args: argparse.Namespace):
+    print("INFO:")    
+    print(f"DATA: {info[args.dataset][args.split]['data_path']}")
+    print(f"TASK INSTRUCTION: {args.task_instruction}")
+    print(f"USE TEST: {args.use_test}")
+    print(f"MODEL: {args.llm_id}")
+    print(f"MODEL MAX LENGTH: {args.model_max_length}")
+    print(f'MAX NEW TOKENS: {args.max_new_tokens}')
+    print(f"BATCH SIZE: {args.batch_size}")
+    print(f"SAVE EVERY: {args.save_every}")
+
 def load_corpus(
         args: argparse.Namespace,
 ) -> Tuple[List[Dict], Optional[Dict[int, int]]]:
     
-    # Corpus with documents from Contriever
     corpus, full_to_subset_idx_map = read_corpus_with_contriever()
 
     return corpus, full_to_subset_idx_map
@@ -73,7 +86,8 @@ def initialize_dataset_and_loader(
         task_instruction=task_instruction, 
         corpus=corpus, 
         full_to_subset_idx_map = full_to_subset_idx_map,)
-        
+    
+
     prompt_dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -81,7 +95,140 @@ def initialize_dataset_and_loader(
         num_workers=8,
         pin_memory=True,
     )
+
     return prompt_dataloader
+
+def pad_to_nearest_multiple(inputs, n_heads, tokenizer):
+    """
+    Pads the sequence length to the nearest multiple of n_heads.
+    
+    Args:
+        inputs (dict): The tokenized inputs with keys "input_ids" and "attention_mask".
+        n_heads (int): The number of attention heads in the model.
+        tokenizer: The tokenizer used for padding.
+
+    Returns:
+        dict: The updated inputs with padded sequences.
+    """
+    seq_len = inputs["input_ids"].size(1)
+    padding_needed = n_heads - (seq_len % n_heads) if seq_len % n_heads != 0 else 0
+
+    if padding_needed > 0:
+        # Pad input_ids with pad_token_id
+        inputs["input_ids"] = torch.nn.functional.pad(
+            inputs["input_ids"],
+            (0, padding_needed),
+            value=tokenizer.pad_token_id
+        )
+        # Pad attention_mask with 0 (no attention on padding tokens)
+        inputs["attention_mask"] = torch.nn.functional.pad(
+            inputs["attention_mask"],
+            (0, padding_needed),
+            value=0
+        )
+
+    return inputs
+
+def bgm_training(args, bgm, prompt_dataloader, num_epochs=3, learning_rate=1e-4, patience=3, min_delta=1e-4):
+    """
+    Function to train BGM model utilizing LoRA.
+    
+    Args:
+        args: Configuration parameters.
+        bgm: BGM object, which includes the model and the tokenizer.
+        prompt_dataloader: DataLoader for the prompt dataset.
+        num_epochs (int): Number of epochs for training.
+        learning_rate (float): Learning rate for the optimizer.
+        patience (int): Number of epochs without improvement before stopping the training.
+        min_delta (float): Minimum improvement in loss required to be considered significant.
+    """
+
+    print("LoRA configuration...")
+    
+    lora_config = LoraConfig(
+        r=8,  # Grado della decomposizione low-rank
+        lora_alpha=32,
+        target_modules=["q", "v"],  
+        lora_dropout=0.1,
+        bias="none"  
+    )
+    
+    # LoRA
+    peft_model = get_peft_model(bgm.model, lora_config).to(device)
+
+    print("LoRA model configured.")
+
+    optimizer = AdamW(peft_model.parameters(), lr=learning_rate)
+
+    # Early stopping variables
+    best_loss = float("inf")
+    patience_counter = 0
+    
+    peft_model.train()
+    for epoch in range(num_epochs):
+        print(f"Epoch {epoch + 1}/{num_epochs}")
+        total_loss = 0
+        
+        for batch_idx, batch in enumerate(tqdm(prompt_dataloader, desc="Batch Progress")):
+
+            optimizer.zero_grad()
+            
+            inputs = batch["input"]["prompt"]
+            labels = batch["output"]
+
+            # Handle empty labels
+            labels = batch["output"]
+            if not labels:
+                labels = [""]
+            
+            inputs = bgm.tokenizer(inputs, padding=args.padding_strategy, return_tensors="pt", max_length=args.model_max_length, truncation=True).to(device)
+            labels = bgm.tokenizer(labels, padding=args.padding_strategy, return_tensors="pt", max_length=args.model_max_length, truncation=True).to(device)
+
+            # Ensure sequence length is compatible with attention heads
+            n_heads = peft_model.config.num_heads
+            inputs = pad_to_nearest_multiple(inputs, n_heads, bgm.tokenizer)
+
+            outputs = peft_model(
+                **inputs, 
+                labels=labels["input_ids"]
+                )
+            
+            loss = outputs.loss
+            total_loss += loss.item()
+            
+            loss.backward()
+            optimizer.step()
+            
+        
+        # Calcola la perdita media per epoca
+        mean_loss = total_loss / len(prompt_dataloader)
+        print(f"Epoch {epoch + 1} complete. Mean Loss: {mean_loss:.4f}")
+
+        # Early stopping logic
+        if mean_loss < best_loss - min_delta:
+            best_loss = mean_loss
+            patience_counter = 0
+            # Salvataggio checkpoint del modello migliore
+            output_dir = f"{args.output_dir}/best_checkpoint"
+            peft_model.save_pretrained(output_dir)
+            print(f"Checkpoint saved in {output_dir} (Best Loss: {best_loss:.4f})")
+        else:
+            patience_counter += 1
+            print(f"No improvement in loss. Patience counter: {patience_counter}/{patience}")
+
+        if patience_counter >= patience:
+            print("Early stopping triggered. Training stopped.")
+            break
+        
+        output_dir = f"{args.output_dir}/epochs/epoch_{epoch + 1}"
+        peft_model.save_pretrained(output_dir)
+        print(f"Checkpoint saved in {output_dir}")
+    
+
+    print("Training complete.")
+    return peft_model
+
+    
 
 def main():
 
@@ -93,7 +240,7 @@ def main():
     llm_id = args.llm_id
 
     bgm = BGM(
-        llm_id, device,  
+        llm_id, device, quantization_bits=args.quantization_bits,  
         model_max_length=args.model_max_length
     )
 
@@ -104,7 +251,6 @@ def main():
     corpus, full_to_subset_idx_map = load_corpus(args)
     print("Corpus and search results loaded")
 
-    # Inizializza task instructions
     task_instruction = args.task_instruction
 
     tokenizer = bgm.tokenizer
@@ -113,10 +259,8 @@ def main():
     prompt_dataloader = initialize_dataset_and_loader(
         args, corpus, full_to_subset_idx_map, tokenizer, task_instruction)
     print("Prompt dataset loaded")
-    
-    #Debug Dataloader
-    for i, entry in enumerate(prompt_dataloader.dataset[:5]):
-        print(f"Esempio {i}: {entry}")
+
+    bgm_training(args, bgm, prompt_dataloader, num_epochs=50, patience=3, min_delta=1e-4)
 
 
 if __name__ == "__main__":

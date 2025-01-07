@@ -40,6 +40,8 @@ class BGMPromptDataset(Dataset):
         full_to_subset_idx_map: Dict[int, int] = None,
     ):
         super().__init__()
+        self.id_mapping = {}  # Mappatura ID originale -> ID personalizzato
+        self.reverse_id_mapping = {}  # Mappatura inversa ID personalizzato -> ID originale
         self.data_path = data_path
         self.max_tokenized_length = max_tokenized_length
         self.full_to_subset_idx_map = full_to_subset_idx_map
@@ -183,7 +185,8 @@ class BGMPromptDataset(Dataset):
 
                 #self.dataset.append(self.create_entry(prompt, reranked_docs, selected_docs))
                 self.case_counters["case_5_reranking"] += 1
-
+                
+    '''
     def create_entry(self, prompt, retrieved_docs, selected_docs):
 
         entry = {
@@ -194,6 +197,7 @@ class BGMPromptDataset(Dataset):
             "output": selected_docs,
         }
         return entry
+    '''
 
     def __len__(self):
         return len(self.dataset)
@@ -208,17 +212,17 @@ class BGMPromptDataset(Dataset):
         examples = self.load_data()
         valid_examples = self.filter_valid_examples(examples)
 
-        print(f"Totale esempi nel file di input: {len(examples)}")
+        #print(f"Totale esempi nel file di input: {len(examples)}")
         print(f"Esempi con 'are_answer=True': {len(valid_examples)}")
 
         grouped_examples = self.group_examples(valid_examples)
-        for key, group in grouped_examples.items():
-            print(f"Esempi con '{key}': {len(group)}")
+        #for key, group in grouped_examples.items():
+            #print(f"Esempi con '{key}': {len(group)}")
 
         group_case_limits = self.calculate_case_limits(grouped_examples)
-        print("Distribuzione pianificata degli esempi nel dataset creato:")
-        for case, limit in group_case_limits.items():
-            print(f"{case}: {limit}")
+        #print("Distribuzione pianificata degli esempi nel dataset creato:")
+        #for case, limit in group_case_limits.items():
+            #print(f"{case}: {limit}")
 
         self.process_examples(valid_examples, group_case_limits)
 
@@ -230,6 +234,86 @@ class BGMPromptDataset(Dataset):
 
         print(f"Totale degli Esempi inclusi nel training dataset creato: {tot}")
 
+    def generate_custom_id(self, original_id: int, idx: int) -> str:
+        """
+        Genera un ID personalizzato per un documento dato il suo ID originale.
+        """
+        custom_id = f"Id_{idx + 1}"
+        self.id_mapping[original_id] = custom_id
+        self.reverse_id_mapping[custom_id] = original_id
+        return custom_id
+    
+    
+    def prepare_documents_for_prompt(self, doc_indices: List[int]) -> List[str]:
+        """
+        Prepara e formatta i documenti per il prompt, utilizzando ID personalizzati.
+        """
+        formatted_documents = []
+        for idx, original_id in enumerate(doc_indices):
+            custom_id = self.generate_custom_id(original_id, idx)
+            doc_info = self.corpus[self.full_to_subset_idx_map[original_id]]
+            title = doc_info['title']
+            text = doc_info['text']
+
+            doc_str = f"Document [{custom_id}](Title: {title}) {text}"
+            formatted_documents.append(doc_str)
+        return formatted_documents
+
+    def create_entry(self, prompt: str, retrieved_docs: List[int], selected_docs: List[int]) -> Dict:
+        """
+        Crea un esempio, includendo il dizionario di mappatura tra ID personalizzati e normali.
+        Mantiene gli ID normali nell'output.
+        """
+        id_mapping = {}
+        mapped_output = [] #se vogliamo far tornare gli indici mappati [Id_1,Id_2]
+
+        for idx, original_id in enumerate(retrieved_docs):
+            custom_id = f"Id_{idx + 1}"
+            id_mapping[custom_id] = original_id
+            self.id_mapping[original_id] = custom_id
+            self.reverse_id_mapping[custom_id] = original_id
+
+            #se vogliamo far tornare gli indici mappati [Id_1,Id_2]
+            #usiamo questo if
+            if original_id in selected_docs:
+                mapped_output.append(custom_id)
+        entry = {
+            "input": {
+                "prompt": prompt,
+                "retrieved_docs": id_mapping,  # Dizionario {Id_1: id normale}
+            },
+            "output": mapped_output, 
+        }
+        return entry
+
+    '''
+    def create_entry(self, prompt, retrieved_docs, selected_docs):
+        """
+        Crea un esempio includendo la mappatura tra ID personalizzati e originali.
+        """
+        mapped_retrieved = [self.id_mapping[doc_id] for doc_id in retrieved_docs]
+        mapped_selected = [self.id_mapping[doc_id] for doc_id in selected_docs]
+
+        entry = {
+            "input": {
+                "prompt": prompt,
+                "retrieved_docs": mapped_retrieved,  # Usa gli ID personalizzati
+            },
+            "output": mapped_selected,  # Usa gli ID personalizzati
+        }
+        return entry
+    '''
+
+    
+    def remap_output(self, mapped_ids: List[str]) -> List[int]:
+        """
+        Rimappa gli ID personalizzati agli ID originali.
+        """
+        return [self.reverse_id_mapping[mapped_id] for mapped_id in mapped_ids]
+    
+
+
+    '''
     def prepare_documents_for_prompt(self, doc_indices: List[int]) -> Tuple[List[str], List[int]]:
 
         """
@@ -255,7 +339,9 @@ class BGMPromptDataset(Dataset):
         )
         return formatted_documents
 
-    def _get_documents_from_indices(self, indices: List[int]) -> List[str]:
+        
+
+        def _get_documents_from_indices(self, indices: List[int]) -> List[str]:
         """
         Selects documents from the corpus based on provided indices and formats them.
         Handles both full corpus and subsets by mapping indices if necessary.
@@ -293,3 +379,4 @@ class BGMPromptDataset(Dataset):
             formatted_documents.append(doc_str)
 
         return formatted_documents
+    '''
