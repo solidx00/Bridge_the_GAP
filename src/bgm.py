@@ -2,7 +2,7 @@ import torch
 import re
 from transformers import (
     AutoConfig, AutoTokenizer, AutoModelForSeq2SeqLM,
-    BitsAndBytesConfig
+    BitsAndBytesConfig, LlamaConfig, AutoModelForCausalLM
 )
 from peft import PeftModel
 from typing import List, Tuple, Optional
@@ -54,13 +54,24 @@ class BGM:
         model_config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
         model_config.max_seq_len = self.model_max_length
 
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_id,
-            trust_remote_code=True,
-            config=model_config,
-            torch_dtype=torch.bfloat16,
-            device_map='cuda:0',
-        )
+        # Determine the appropriate model class
+        if isinstance(model_config, LlamaConfig):
+            model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                trust_remote_code=True,
+                config=model_config,
+                torch_dtype=torch.bfloat16,
+                device_map='cuda:0',
+            )
+        else:
+            model = AutoModelForSeq2SeqLM.from_pretrained(
+                model_id,
+                trust_remote_code=True,
+                config=model_config,
+                torch_dtype=torch.bfloat16,
+                device_map='cuda:0',
+            )
+    
         model.eval()
 
         tokenizer = AutoTokenizer.from_pretrained(
@@ -87,7 +98,7 @@ class BGM:
         self, 
         prompt: str, 
         padding_strategy: str = "longest",
-        max_new_tokens: int = 30
+        max_new_tokens: int = 15
     ) -> List[str]:
         """
         Generates the ordered document IDs based on the query and documents.
@@ -96,11 +107,11 @@ class BGM:
             return []  # Return an empty list as the output
     
         inputs = self.tokenizer(
-            prompt, 
-            return_tensors="pt", 
-            max_length=self.model_max_length, 
-            padding=padding_strategy, 
-            truncation=True
+            prompt,
+            return_tensors="pt",
+            max_length=self.model_max_length,
+            truncation=True,
+            padding=padding_strategy
         ).to(self.device)
 
         generated_ids = self.model.generate(

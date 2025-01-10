@@ -191,6 +191,7 @@ class PromptDataset(Dataset):
         self.excluded_samples_ids = []
         self.preprocessed_data = []
         self.prompt_tokens_lengths = []
+        self.answers = []
 
         for idx, example in enumerate(data):
             example_info = self._get_sample_info(example)
@@ -221,6 +222,7 @@ class PromptDataset(Dataset):
             self.prompts.append(prompt)
             self.gold_document_idxs.append(example_info['gold_document_idx'])
             self.prompt_tokens_lengths.append(tokens_len)
+            self.answers.append(example_info['answers'])
 
     
     def _get_sample_info(self, example):
@@ -388,7 +390,8 @@ class PromptDataset(Dataset):
             "prompt": self.prompts[idx],
             "document_indices": document_indices,
             "gold_document_idx": self.gold_document_idxs[idx],
-            "prompt_tokens_len": self.prompt_tokens_lengths[idx]
+            "prompt_tokens_len": self.prompt_tokens_lengths[idx],
+            "answers": self.answers[idx]
         }
     
 

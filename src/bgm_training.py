@@ -8,7 +8,7 @@ from peft import LoftQConfig,LoraConfig, get_peft_model
 from transformers import AdamW
 from torch.utils.data import DataLoader, Dataset
 from transformers import PreTrainedTokenizer
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoConfig
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoConfig, LlamaConfig, AutoModelForCausalLM
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
@@ -18,7 +18,7 @@ SEED=10
 info = {
     "nq": {
         "train": {
-            "data_path": r"C:\Users\franc\Documents\Bridge_the_GAP\data\gen_ids_document_training_set_bgm\nq_training\gemma-2-2b-it\train\retrieved\contriever\5_doc\numdoc5_retr5_info_all_extended_training_set.json",
+            "data_path": r"C:\Users\franc\Documents\Bridge_the_GAP\data\gen_best_ids_document_training_set_bgm\nq_training\gemma-2-2b-it\train\retrieved\contriever\5_doc\numdoc5_retr5_info_all_extended_training_set.json",
             "corpus_file": r"C:\Users\franc\Documents\Bridge_the_GAP\data\corpus_with_contriever_at150.json",
         },
     }
@@ -35,13 +35,13 @@ def parse_arguments(custom_args=None):
 
     default_args = {
         'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\lora_training_bgm\lora-checkpoint',
-        'llm_id': 'google-t5/t5-base',
+        'llm_id': 'meta-llama/Llama-3.2-1B-Instruct',
         'dataset': 'nq',
         'model_max_length': 4096,
         'quantization_bits': 4,
         'task_instruction' : "Output only the document IDs relevant to the query. Use this format: [Id_1, Id_2, ...].",
         'use_test': False,
-        'padding_strategy': 'longest',
+        'padding_strategy': 'max_length',
         'max_new_tokens': 15,
         'batch_size': None,
         'save_every': 250,
@@ -129,6 +129,7 @@ def pad_to_nearest_multiple(inputs, n_heads, tokenizer):
 
     return inputs
 
+
 def bgm_training(args, bgm, prompt_dataloader, num_epochs=3, learning_rate=1e-4, patience=3, min_delta=1e-4):
     """
     Function to train BGM model utilizing LoRA.
@@ -145,14 +146,26 @@ def bgm_training(args, bgm, prompt_dataloader, num_epochs=3, learning_rate=1e-4,
 
     print("LoRA configuration...")
     
-    lora_config = LoraConfig(
-        r=8,  # Grado della decomposizione low-rank
-        lora_alpha=32,
-        target_modules=["q", "v"],  
-        lora_dropout=0.1,
-        bias="none"  
+    # Controllo del modello basato sul nome o tipo
+    if "gemma" in args.llm_id.lower():
+        print("Configuring LoRA for Gemma model...")
+        lora_config = LoraConfig(
+            r=8,  # Grado della decomposizione low-rank
+            lora_alpha=32,
+            target_modules=["q", "v"],  
+            lora_dropout=0.1,
+            bias="none"  
     )
-    
+    else:
+        print(f"Configuring LoRA for generic model: {args.llm_id}")
+        lora_config = LoraConfig(
+            r=8,  # Different rank for generic models
+            lora_alpha=32,
+            target_modules=["self_attn.q_proj", "self_attn.v_proj"],
+            lora_dropout=0.1,
+            bias="none"
+        )
+
     # LoRA
     peft_model = get_peft_model(bgm.model, lora_config).to(device)
 
@@ -181,12 +194,15 @@ def bgm_training(args, bgm, prompt_dataloader, num_epochs=3, learning_rate=1e-4,
             if not labels:
                 labels = [""]
             
-            inputs = bgm.tokenizer(inputs, padding=args.padding_strategy, return_tensors="pt", max_length=args.model_max_length, truncation=True).to(device)
-            labels = bgm.tokenizer(labels, padding=args.padding_strategy, return_tensors="pt", max_length=args.model_max_length, truncation=True).to(device)
+            inputs = bgm.tokenizer(inputs, padding=False, return_tensors="pt", max_length=args.model_max_length, truncation=True).to(device)
+            input_lenght = inputs["input_ids"].shape[1]
+            labels = bgm.tokenizer(labels, padding=args.padding_strategy, return_tensors="pt", max_length=input_lenght, truncation=True).to(device)
+            labels["input_ids"][labels["input_ids"] == bgm.tokenizer.pad_token_id] = -100
 
             # Ensure sequence length is compatible with attention heads
-            n_heads = peft_model.config.num_heads
-            inputs = pad_to_nearest_multiple(inputs, n_heads, bgm.tokenizer)
+            if "gemma" in args.llm_id.lower():
+                n_heads = peft_model.config.num_heads
+                inputs = pad_to_nearest_multiple(inputs, n_heads, bgm.tokenizer)
 
             outputs = peft_model(
                 **inputs, 
@@ -209,7 +225,7 @@ def bgm_training(args, bgm, prompt_dataloader, num_epochs=3, learning_rate=1e-4,
             best_loss = mean_loss
             patience_counter = 0
             # Salvataggio checkpoint del modello migliore
-            output_dir = f"{args.output_dir}/best_checkpoint"
+            output_dir = f"{args.output_dir}/{args.llm_id}/best_checkpoint"
             peft_model.save_pretrained(output_dir)
             print(f"Checkpoint saved in {output_dir} (Best Loss: {best_loss:.4f})")
         else:
@@ -220,7 +236,7 @@ def bgm_training(args, bgm, prompt_dataloader, num_epochs=3, learning_rate=1e-4,
             print("Early stopping triggered. Training stopped.")
             break
         
-        output_dir = f"{args.output_dir}/epochs/epoch_{epoch + 1}"
+        output_dir = f"{args.output_dir}/{args.llm_id}/epochs/epoch_{epoch + 1}"
         peft_model.save_pretrained(output_dir)
         print(f"Checkpoint saved in {output_dir}")
     
@@ -259,6 +275,12 @@ def main():
     prompt_dataloader = initialize_dataset_and_loader(
         args, corpus, full_to_subset_idx_map, tokenizer, task_instruction)
     print("Prompt dataset loaded")
+
+    #print("Printing 5 examples from the prompt dataloader...")
+    #for i, example in enumerate(prompt_dataloader):
+        #print(f"Example {i + 1}: {example}")
+        #if i == 10:
+            #break
 
     bgm_training(args, bgm, prompt_dataloader, num_epochs=50, patience=3, min_delta=1e-4)
 

@@ -277,32 +277,18 @@ class BGMPromptDataset(Dataset):
             #usiamo questo if
             if original_id in selected_docs:
                 mapped_output.append(custom_id)
+
+        # Output is a concatenate of string to handle batch
+        mapped_output_str = ", ".join(mapped_output)
+
         entry = {
             "input": {
                 "prompt": prompt,
                 "retrieved_docs": id_mapping,  # Dizionario {Id_1: id normale}
             },
-            "output": mapped_output, 
+            "output": mapped_output_str, 
         }
         return entry
-
-    '''
-    def create_entry(self, prompt, retrieved_docs, selected_docs):
-        """
-        Crea un esempio includendo la mappatura tra ID personalizzati e originali.
-        """
-        mapped_retrieved = [self.id_mapping[doc_id] for doc_id in retrieved_docs]
-        mapped_selected = [self.id_mapping[doc_id] for doc_id in selected_docs]
-
-        entry = {
-            "input": {
-                "prompt": prompt,
-                "retrieved_docs": mapped_retrieved,  # Usa gli ID personalizzati
-            },
-            "output": mapped_selected,  # Usa gli ID personalizzati
-        }
-        return entry
-    '''
 
     
     def remap_output(self, mapped_ids: List[str]) -> List[int]:
@@ -311,7 +297,6 @@ class BGMPromptDataset(Dataset):
         """
         return [self.reverse_id_mapping[mapped_id] for mapped_id in mapped_ids]
     
-
 
     '''
     def prepare_documents_for_prompt(self, doc_indices: List[int]) -> Tuple[List[str], List[int]]:
