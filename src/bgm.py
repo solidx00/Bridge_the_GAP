@@ -80,7 +80,7 @@ class BGM:
             padding_side="left",
             truncation_side="left"
         )
-        tokenizer.pad_token = tokenizer.eos_token  # Set pad token
+        tokenizer.pad_token = tokenizer.eos_token
 
         return model, tokenizer
     

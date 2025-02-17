@@ -36,7 +36,7 @@ class BGMPromptDataset(Dataset):
         data_path: str, 
         max_tokenized_length: int,
         tokenizer: AutoTokenizer,
-        task_instruction: str,
+        #task_instruction: str,
         full_to_subset_idx_map: Dict[int, int] = None,
     ):
         super().__init__()
@@ -46,7 +46,7 @@ class BGMPromptDataset(Dataset):
         self.max_tokenized_length = max_tokenized_length
         self.full_to_subset_idx_map = full_to_subset_idx_map
         self.tokenizer = tokenizer
-        self.task_instruction = task_instruction
+        #self.task_instruction = task_instruction
         self.corpus = corpus
         self.percentages = {
             "case_1_single_doc": 0.07,
@@ -100,7 +100,7 @@ class BGMPromptDataset(Dataset):
 
 
         for example in valid_examples:
-            prompt = f"Task Instruction: {self.task_instruction}\nQuestion:{example['query']}"
+            prompt = f"Question:{example['query']}" #Task Instruction: {self.task_instruction}\n
             retrieved_docs = example["document_indices"]
             selected_docs = example["selected_documents"]
 

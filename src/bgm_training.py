@@ -4,14 +4,16 @@ import warnings
 from tqdm import tqdm
 from bgm_prompt_dataset import BGMPromptDataset
 from bgm import BGM
-from peft import LoftQConfig,LoraConfig, get_peft_model
-from transformers import AdamW
+from peft import LoraConfig
+from transformers import TrainingArguments, pipeline
 from torch.utils.data import DataLoader, Dataset
 from transformers import PreTrainedTokenizer
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoConfig, LlamaConfig, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForCausalLM
+from trl import setup_chat_format, SFTTrainer, SFTConfig
+from datasets import Dataset
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
 warnings.filterwarnings('ignore')
 SEED=10
 
@@ -34,21 +36,30 @@ def parse_arguments(custom_args=None):
     """
 
     default_args = {
-        'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\lora_training_bgm\lora-checkpoint',
-        'llm_id': 'meta-llama/Llama-3.2-1B-Instruct',
+        'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\SFT_training_bgm',
+        'llm_id': 'meta-llama/Llama-3.2-1B',
         'dataset': 'nq',
         'model_max_length': 4096,
         'quantization_bits': 4,
         'task_instruction' : "Output only the document IDs relevant to the query. Use this format: [Id_1, Id_2, ...].",
         'use_test': False,
-        'padding_strategy': 'max_length',
+        'padding_strategy': 'longest',
         'max_new_tokens': 15,
         'batch_size': None,
         'save_every': 250,
     }
 
+    # Generate the output directory dynamically using llm_id
+    llm_id_cleaned = default_args['llm_id'].replace("/", "-")
+    default_args['output_dir'] = rf"C:\Users\franc\Documents\Bridge_the_GAP\data\SFT_training_bgm\{llm_id_cleaned}"
+
     if custom_args:
         default_args.update(custom_args)
+
+        # Ensure output_dir dynamically updates if llm_id is changed in custom_args
+        if 'llm_id' in custom_args:
+            llm_id_cleaned = custom_args['llm_id'].replace("/", "-")
+            default_args['output_dir'] = rf"C:\Users\franc\Documents\Bridge_the_GAP\data\SFT_training_bgm\{llm_id_cleaned}"
 
     return DotDict(**default_args)
 
@@ -71,6 +82,59 @@ def load_corpus(
 
     return corpus, full_to_subset_idx_map
 
+def process_dataset_training(dataset, task_instruction):
+    """
+    Processes the dataset by applying the chat template transformation.
+
+    Args:
+        dataset (List[Dict]): The dataset to be processed.
+
+    Returns:
+        List[Dict]: The processed dataset with formatted text.
+    """
+    processed_dataset = []
+
+    for sample in dataset:
+        prompt = sample['input']['prompt']
+        output = sample['output']
+        
+        # Define the chat messages format
+        messages = [
+            {"role": "system", "content": task_instruction},
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": output}
+        ]
+        
+        processed_dataset.append(messages)
+
+    return processed_dataset
+
+def process_dataset_testing(dataset, task_instruction):
+    """
+    Processes the dataset by applying the chat template transformation.
+
+    Args:
+        dataset (List[Dict]): The dataset to be processed.
+
+    Returns:
+        List[Dict]: The processed dataset with formatted text.
+    """
+    processed_dataset = []
+
+    for sample in dataset:
+        prompt = sample['input']['prompt']
+        output = sample['output']
+        
+        # Define the chat messages format
+        messages = [
+            {"role": "system", "content": task_instruction},
+            {"role": "user", "content": prompt},
+        ]
+        
+        processed_dataset.append(messages)
+
+    return processed_dataset
+
 def initialize_dataset_and_loader(
     args: argparse.Namespace, 
     corpus: List[Dict], 
@@ -83,54 +147,25 @@ def initialize_dataset_and_loader(
         data_path=info[args.dataset][args.split]['data_path'],
         tokenizer=tokenizer,  
         max_tokenized_length=args.model_max_length - 2,
-        task_instruction=task_instruction, 
+        #task_instruction=task_instruction, 
         corpus=corpus, 
         full_to_subset_idx_map = full_to_subset_idx_map,)
     
+    dataset_training = process_dataset_training(dataset, task_instruction)
+    dataset_testing = process_dataset_testing(dataset, task_instruction)
 
-    prompt_dataloader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=8,
-        pin_memory=True,
-    )
+    dataset_training = Dataset.from_dict({"chat": dataset_training})
+    dataset_testing = Dataset.from_dict({"chat": dataset_testing})
 
-    return prompt_dataloader
+    dataset_training = dataset_training.map(lambda x: {"formatted_chat": tokenizer.apply_chat_template(x["chat"], tokenize=False, add_generation_prompt=False, add_special_tokens=False)})
 
-def pad_to_nearest_multiple(inputs, n_heads, tokenizer):
-    """
-    Pads the sequence length to the nearest multiple of n_heads.
-    
-    Args:
-        inputs (dict): The tokenized inputs with keys "input_ids" and "attention_mask".
-        n_heads (int): The number of attention heads in the model.
-        tokenizer: The tokenizer used for padding.
+    dataset_testing = dataset_testing.map(lambda x: {"formatted_chat": tokenizer.apply_chat_template(x["chat"], tokenize=False, add_generation_prompt=False, add_special_tokens=False)})
 
-    Returns:
-        dict: The updated inputs with padded sequences.
-    """
-    seq_len = inputs["input_ids"].size(1)
-    padding_needed = n_heads - (seq_len % n_heads) if seq_len % n_heads != 0 else 0
-
-    if padding_needed > 0:
-        # Pad input_ids with pad_token_id
-        inputs["input_ids"] = torch.nn.functional.pad(
-            inputs["input_ids"],
-            (0, padding_needed),
-            value=tokenizer.pad_token_id
-        )
-        # Pad attention_mask with 0 (no attention on padding tokens)
-        inputs["attention_mask"] = torch.nn.functional.pad(
-            inputs["attention_mask"],
-            (0, padding_needed),
-            value=0
-        )
-
-    return inputs
+    return dataset_training, dataset_testing
 
 
-def bgm_training(args, bgm, prompt_dataloader, num_epochs=3, learning_rate=1e-4, patience=3, min_delta=1e-4):
+
+def bgm_training(args, model, tokenizer, dataset):
     """
     Function to train BGM model utilizing LoRA.
     
@@ -144,107 +179,72 @@ def bgm_training(args, bgm, prompt_dataloader, num_epochs=3, learning_rate=1e-4,
         min_delta (float): Minimum improvement in loss required to be considered significant.
     """
 
-    print("LoRA configuration...")
+    print("SFTT configuration...")
     
-    # Controllo del modello basato sul nome o tipo
-    if "gemma" in args.llm_id.lower():
-        print("Configuring LoRA for Gemma model...")
-        lora_config = LoraConfig(
-            r=8,  # Grado della decomposizione low-rank
-            lora_alpha=32,
-            target_modules=["q", "v"],  
-            lora_dropout=0.1,
-            bias="none"  
+    
+    sft_config = SFTConfig(
+        dataset_text_field="formatted_chat",  # Specify the field containing the conversation
+        output_dir=args.output_dir,
+        max_steps=1000,  # Adjust based on dataset size and desired training duration
+        per_device_train_batch_size=4,  # Set according to your GPU memory capacity
+        learning_rate=5e-5,  # Common starting point for fine-tuning
+        logging_steps=10,  # Frequency of logging training metrics
+        save_steps=100,  # Frequency of saving model checkpoints
     )
-    else:
-        print(f"Configuring LoRA for generic model: {args.llm_id}")
-        lora_config = LoraConfig(
-            r=8,  # Different rank for generic models
-            lora_alpha=32,
-            target_modules=["self_attn.q_proj", "self_attn.v_proj"],
-            lora_dropout=0.1,
-            bias="none"
-        )
-
-    # LoRA
-    peft_model = get_peft_model(bgm.model, lora_config).to(device)
 
     print("LoRA model configured.")
 
-    optimizer = AdamW(peft_model.parameters(), lr=learning_rate)
+    trainer = SFTTrainer(
+        model=model,
+        args=sft_config,
+        train_dataset=dataset,
+        tokenizer=tokenizer,
+    )
 
-    # Early stopping variables
-    best_loss = float("inf")
-    patience_counter = 0
-    
-    peft_model.train()
-    for epoch in range(num_epochs):
-        print(f"Epoch {epoch + 1}/{num_epochs}")
-        total_loss = 0
-        
-        for batch_idx, batch in enumerate(tqdm(prompt_dataloader, desc="Batch Progress")):
-
-            optimizer.zero_grad()
-            
-            inputs = batch["input"]["prompt"]
-            labels = batch["output"]
-
-            # Handle empty labels
-            labels = batch["output"]
-            if not labels:
-                labels = [""]
-            
-            inputs = bgm.tokenizer(inputs, padding=False, return_tensors="pt", max_length=args.model_max_length, truncation=True).to(device)
-            input_lenght = inputs["input_ids"].shape[1]
-            labels = bgm.tokenizer(labels, padding=args.padding_strategy, return_tensors="pt", max_length=input_lenght, truncation=True).to(device)
-            labels["input_ids"][labels["input_ids"] == bgm.tokenizer.pad_token_id] = -100
-
-            # Ensure sequence length is compatible with attention heads
-            if "gemma" in args.llm_id.lower():
-                n_heads = peft_model.config.num_heads
-                inputs = pad_to_nearest_multiple(inputs, n_heads, bgm.tokenizer)
-
-            outputs = peft_model(
-                **inputs, 
-                labels=labels["input_ids"]
-                )
-            
-            loss = outputs.loss
-            total_loss += loss.item()
-            
-            loss.backward()
-            optimizer.step()
-            
-        
-        # Calcola la perdita media per epoca
-        mean_loss = total_loss / len(prompt_dataloader)
-        print(f"Epoch {epoch + 1} complete. Mean Loss: {mean_loss:.4f}")
-
-        # Early stopping logic
-        if mean_loss < best_loss - min_delta:
-            best_loss = mean_loss
-            patience_counter = 0
-            # Salvataggio checkpoint del modello migliore
-            output_dir = f"{args.output_dir}/{args.llm_id}/best_checkpoint"
-            peft_model.save_pretrained(output_dir)
-            print(f"Checkpoint saved in {output_dir} (Best Loss: {best_loss:.4f})")
-        else:
-            patience_counter += 1
-            print(f"No improvement in loss. Patience counter: {patience_counter}/{patience}")
-
-        if patience_counter >= patience:
-            print("Early stopping triggered. Training stopped.")
-            break
-        
-        output_dir = f"{args.output_dir}/{args.llm_id}/epochs/epoch_{epoch + 1}"
-        peft_model.save_pretrained(output_dir)
-        print(f"Checkpoint saved in {output_dir}")
-    
-
+    trainer.train()
     print("Training complete.")
-    return peft_model
 
-    
+    # save model
+    trainer.save_model()
+    print("Training weights saved.")
+
+def evaluate_model(model_weights_path, tokenizer, dataset, num_examples=10, max_length=50):
+    """
+    Generate and print examples using the trained model.
+
+    Args:
+        model_weights_path (str): Path to the trained model weights.
+        tokenizer (PreTrainedTokenizer): The tokenizer associated with the model.
+        dataset (Dataset): The dataset containing input prompts.
+        num_examples (int, optional): Number of examples to generate. Defaults to 10.
+        max_length (int, optional): Maximum length of the generated sequences. Defaults to 512.
+    """
+    # Load the trained model
+    model = AutoModelForCausalLM.from_pretrained(model_weights_path)
+    model.to(device)
+    model.eval()
+
+    # Ensure num_examples does not exceed the dataset size
+    num_examples = min(num_examples, len(dataset))
+
+    for i in tqdm(range(num_examples), desc="Generating examples"):
+        # Retrieve the formatted chat from the dataset
+        formatted_chat = dataset['formatted_chat'][i]
+
+        # Tokenize the input
+        inputs = tokenizer(formatted_chat, return_tensors="pt", truncation=False).to(device)
+
+        # Generate the model's response
+        with torch.no_grad():
+            outputs = model.generate(**inputs, max_new_tokens=max_length, num_beams=5)
+
+        # Decode the generated response
+        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=False)
+
+        # Print the example
+        #print(formatted_chat)
+        print(f"Example {i + 1}:\n{generated_text}\n{'=' * 50}\n")
+
 
 def main():
 
@@ -260,7 +260,11 @@ def main():
         model_max_length=args.model_max_length
     )
 
+    model= bgm.model
+
     tokenizer = bgm.tokenizer
+
+    model, tokenizer = setup_chat_format(model, tokenizer)
     print("LLM loaded")
 
     print("Loading corpus and search results...")
@@ -269,20 +273,22 @@ def main():
 
     task_instruction = args.task_instruction
 
-    tokenizer = bgm.tokenizer
-
     print("Loading prompt dataset...")
-    prompt_dataloader = initialize_dataset_and_loader(
-        args, corpus, full_to_subset_idx_map, tokenizer, task_instruction)
+    dataset_training, dataset_testing = initialize_dataset_and_loader(
+        args, corpus, full_to_subset_idx_map, tokenizer, task_instruction
+    )
     print("Prompt dataset loaded")
 
-    #print("Printing 5 examples from the prompt dataloader...")
-    #for i, example in enumerate(prompt_dataloader):
-        #print(f"Example {i + 1}: {example}")
-        #if i == 10:
-            #break
+    print_info(args)
 
-    bgm_training(args, bgm, prompt_dataloader, num_epochs=50, patience=3, min_delta=1e-4)
+    print(dataset_training['formatted_chat'][0])
+    print(dataset_testing['formatted_chat'][0])
+
+    #bgm_training(args, model, bgm.tokenizer, dataset_training)
+
+    #training_path=r'C:\Users\franc\Documents\Bridge_the_GAP\data\SFT_training_bgm\meta-llama-Llama-3.2-1B\checkpoint-700'  #best checkpoint 700-800
+    #evaluate_model(training_path, bgm.tokenizer, dataset_testing, num_examples=20, max_length=15)
+
 
 
 if __name__ == "__main__":
