@@ -12,6 +12,7 @@ from trl import setup_chat_format
 
 from utils import *
 from bgm import BGM
+from llm import LLM
 from default_prompts import *
 from prompt_dataset import PromptDataset
 from datasets import Dataset
@@ -40,8 +41,9 @@ def parse_arguments(custom_args=None):
     """
     # Define default values
     default_args = {
-        'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\gen_id_res_example_bgm',
-        'llm_id': 'meta-llama/Llama-3.2-1B',
+        'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\gen_res_example_llm_with_bgm',
+        'bgm_id': 'meta-llama/Llama-3.2-1B',
+        'llm_id': 'google/gemma-2-2b-it',
         'dataset': 'nq',
         'task_instruction' : "Output only the document IDs relevant to the query. Use this format: [Id_1, Id_2, ...].",
         'model_max_length': 4096,
@@ -51,7 +53,7 @@ def parse_arguments(custom_args=None):
         'num_retrieved_documents': 5,
         'use_test': True,
         'padding_strategy': 'longest',
-        'max_new_tokens': 15,
+        'max_new_tokens': 50,
         'use_task_with_proof': False,
         'batch_size': None,
         'save_every': 250,
@@ -156,95 +158,6 @@ def initialize_dataset_and_loader(
     )
     return prompt_dataloader
 
-
-def check_documents_before_model(
-    document_indices: List[str],
-    answers: List[str],
-    prompt: str
-) -> Tuple[bool, List[str]]:
-    """
-    Controlla se almeno uno dei documenti passati al modello contiene una delle risposte.
-
-    Args:
-        document_indices (List[str]): Lista degli ID dei documenti passati al modello.
-        answers (List[str]): Lista delle risposte da cercare.
-        prompt (str): Testo completo del prompt.
-
-    Returns:
-        Tuple[bool, List[str]]:
-            - True se almeno un documento contiene una risposta.
-            - Lista degli ID dei documenti con risposta trovata.
-    """
-    # Usa regex per estrarre i documenti dal prompt
-    documents = re.findall(r"Document \[(\d+)\]\(.*?\)\s(.*?)(?=Document \[\d+\]|$)", prompt, re.DOTALL)
-    documents_dict = {doc_id: text.strip() for doc_id, text in documents}
-
-    document_indices = [str(doc).strip() for doc in document_indices]
-
-    documents_with_answer = []
-
-    for id_doc in document_indices: 
-        if id_doc in documents_dict:
-            document_text = documents_dict[id_doc]
-            for answer in answers:
-                if answer.lower() in document_text.lower():
-                    documents_with_answer.append(id_doc)
-                    break  # Non serve controllare altre risposte per questo documento
-
-    if documents_with_answer:
-        return True, documents_with_answer
-
-    return False, []
-
-
-def check_document_with_answer(
-    original_ids: str,
-    answers: List[str],
-    prompt: str
-) -> Tuple[bool, Optional[str], List[str], List[str]]:
-    """
-    Verifica se almeno un documento tra quelli con ID specificati contiene una delle risposte.
-
-    Args:
-        original_ids (str): Stringa di ID originali separati da virgola.
-        answers (List[str]): Lista delle risposte da cercare.
-        prompt (str): Testo completo del prompt.
-
-    Returns:
-        Tuple[bool, Optional[str], List[str], List[str]]:
-            - True se almeno una risposta è stata trovata.
-            - La prima risposta trovata o None.
-            - Lista degli ID dei documenti che contengono la risposta.
-            - Lista di tutti gli ID generati.
-    """
-    # Usa regex per estrarre i documenti dal prompt
-    documents = re.findall(r"Document \[(\d+)\]\(.*?\)\s(.*?)(?=Document \[\d+\]|$)", prompt, re.DOTALL)
-    documents_dict = {doc_id: text.strip() for doc_id, text in documents}
-
-    # Estrae e pulisce gli ID dalla stringa
-    ids_to_check = [id_.strip() for id_ in original_ids.split(",") if id_.strip()]
-
-    # Lista di documenti contenenti la risposta
-    documents_with_answer = []
-
-    first_answer = None
-
-    # Controlla ogni documento indicato
-    for id_doc in ids_to_check:
-        if id_doc in documents_dict:
-            document_text = documents_dict[id_doc]
-            for answer in answers:
-                if answer.lower() in document_text.lower():
-                    documents_with_answer.append(id_doc)
-                    if not first_answer:
-                        first_answer = answer
-
-    if documents_with_answer:
-        return True, first_answer, documents_with_answer, ids_to_check
-
-    # Se non trova alcuna risposta
-    return False, None, [], ids_to_check
-
     
 def map_document_indices(prompt: str, document_indices: list) -> tuple:
     """
@@ -302,14 +215,92 @@ def extract_and_convert_answer_indices(generated_output: str, id_mapping: dict) 
 
     # Restituisci gli ID originali come stringa separata da virgole
     return ",".join(original_ids)
+
+def reconstruct_prompt_from_ids(
+    original_ids: str,
+    prompt: str,
+    task_instruction: str = "You are given a question and you must respond based on the provided documents. You must always provide an answer."
+) -> str:
+    """
+    Ricostruisce il prompt originale utilizzando solo i documenti selezionati dal modello,
+    ignorando gli ID non presenti nella lista generale.
+
+    Args:
+        original_ids (str): Stringa contenente gli ID separati da virgola (es. "628506,3546609").
+        prompt (str): Testo completo del prompt originale.
+
+    Returns:
+        str: Il prompt ricostruito contenente solo i documenti selezionati.
+    """
+    query_match = re.search(r"Question:\s*(.*?)(?=Document|\Z)", prompt, re.DOTALL)
+    query = query_match.group(1).strip() if query_match else "Query non trovata"
+
+    #print(f"Query originale trovata: {query}")
     
+    documents = re.findall(
+        r"(Document \[(\d+)\]\(.*?\)\s.*?)(?=Document \[\d+\]|$)", 
+        prompt, 
+        re.DOTALL
+    )
+    documents_dict = {doc_id.strip(): full_text.strip() for full_text, doc_id in documents}
+
+    print(f"ID disponibili nel prompt: {list(documents_dict.keys())}")
+
+    selected_ids = [id_.strip() for id_ in original_ids.split(",") if id_.strip()]
+    
+    valid_ids = [id_ for id_ in selected_ids if id_ in documents_dict]
+
+    print(f"ID validi generati dal modello: {valid_ids}")
+
+    selected_documents = [
+        re.sub(r'Answer:\s*\n?', '', documents_dict[id_]) 
+        for id_ in valid_ids
+    ]
+
+    if not selected_documents:
+        return #nesun documento trovato
+
+    reconstructed_prompt = "\n".join(selected_documents)
+
+    final_prompt = (f"{task_instruction}\nQuestion:{query}\nDocuments:\n{reconstructed_prompt}\nAnswer:")
+
+    final_prompt = re.sub(r'\n+', '\n', final_prompt).strip() + "\n"
+
+    return final_prompt
+
+def extract_generate_answers(
+    args: argparse.Namespace, 
+    generated_output: List[str]
+) -> List[str]:
+    answer_prefix = "Answer:"
+    if args.use_model_chat_template:
+        answer_prefix = re.escape(chat_task_templates[args.llm_id]['answer_prefix'])
+
+    generated_answers = []
+    for output in generated_output:
+        matches = list(re.finditer(answer_prefix, output))
+        match_idx = 0
+
+        # When using the proof there is a one-shot example that already 
+        # contains the string "Answer:". Thus, we should get the second (match_idx=1) match.
+        if args.use_task_with_proof:
+            match_idx = 1
+            if args.use_model_chat_template and answer_prefix != "Answer:":
+                match_idx = 0
+ 
+        answer_end = matches[match_idx].end()
+        response = output[answer_end:].strip()
+        generated_answers.append(response)
+    
+    return generated_answers
 
 def print_info(args: argparse.Namespace):
     print("INFO:")    
     print(f"DATA: {info[args.dataset]['test']['data_path']}")
     print(f"TASK INSTRUCTION: {args.task_instruction}")
     print(f"USE TEST: {args.use_test}")
-    print(f"MODEL: {args.llm_id}")
+    print(f"BGM MODEL: {args.bgm_id}")
+    print(f"LLm MODEL: {args.llm_id}")
     print(f"MODEL MAX LENGTH: {args.model_max_length}")
     print(f'MAX NEW TOKENS: {args.max_new_tokens}')
     print(f"USE MODEL CHAT TEMPLATE: {args.use_model_chat_template}")
@@ -322,7 +313,8 @@ def print_info(args: argparse.Namespace):
 
 def generate_and_save(
     args: argparse.Namespace, 
-    model_weights_path, 
+    model_weights_path,
+    llm: LLM, 
     tokenizer,
     dataset,
     num_examples=10,
@@ -331,15 +323,16 @@ def generate_and_save(
     
     llm_id = args.llm_id
     num_doc = args.num_retrieved_documents
-    save_every = args.save_every 
+    save_every = args.save_every
+    retriever_str = "contriever"
+    padding_str = f"_{args.padding_strategy}{args.model_max_length}" if args.padding_strategy != "longest" else "" 
+    chat_template_str = "_template" if args.use_model_chat_template else ""
+    prompt_type = "retrieved_proof" if args.use_task_with_proof else "retrieved"
 
     # Create the saving directory
     llm_folder = llm_id.split("/")[1] if '/' in llm_id else llm_id
-    saving_dir = f"{args.output_dir}/{args.dataset}/{llm_folder}/{args.split}/{num_doc}_doc"
-    os.makedirs(saving_dir, exist_ok=True)
-
-    # Path del file .json
-    json_file_path = os.path.join(saving_dir, "generated_results_with_best_weights.json")
+    saving_dir = f"{args.output_dir}/{args.dataset}/{llm_folder}/{args.split}/{prompt_type}/{retriever_str}/{num_doc}_doc"
+    #os.makedirs(saving_dir, exist_ok=True)
 
     # Load the trained model
     model = AutoModelForCausalLM.from_pretrained(model_weights_path)
@@ -353,29 +346,15 @@ def generate_and_save(
 
         prompt = prompt_batch['prompt'].replace('You are given a question and you must respond based on the provided documents. You must always provide an answer.', "")
         document_indices= prompt_batch['document_indices']
-        answers = prompt_batch['answers']
 
         # Mappa i document ID nel prompt
         modified_prompt, id_mapping = map_document_indices(prompt, document_indices)
         print(f"Processing Example {idx+1}:\n")
-        print("Mappatura ID:", id_mapping)
-
-        # Controllo se i 5 documenti passati al modello contengono almeno la risposta
-        has_answer_before, documents_with_answer_before = check_documents_before_model(
-            document_indices, answers, prompt
-        )
-
-        if has_answer_before:
-            print(f"I documenti passati al modello contengono risposte. ID documenti: {documents_with_answer_before}")
-        else:
-            print("I documenti passati al modello NON contengono alcuna risposta.")
 
         prompt_formatted = process_dataset(modified_prompt, args.task_instruction)
         prompt_formatted = tokenizer.apply_chat_template(
             prompt_formatted, tokenize=False, add_generation_prompt=False, add_special_tokens=False
         )
-
-        #print(f"Formatted Chat:\n{prompt}\n")
 
         # Tokenize the input
         inputs = tokenizer(prompt_formatted, return_tensors="pt", truncation=False).to(device)
@@ -389,56 +368,56 @@ def generate_and_save(
 
         # Convertire gli ID generati nei document ID originali
         original_ids = extract_and_convert_answer_indices(generated_text, id_mapping)
-        print(f"I migliori indici secondo il modello: {original_ids}\n")
 
-        # Verifica la presenza della risposta nei documenti corrispondenti
-        has_answer_after, found_answer, documents_with_answer_after, all_generated_ids = check_document_with_answer(
-            original_ids, answers, prompt
+        filtered_prompt = reconstruct_prompt_from_ids(original_ids, prompt)
+        print(filtered_prompt)
+
+        generated_output = llm.generate(
+            filtered_prompt,
+            padding_strategy=args.padding_strategy, 
+            max_new_tokens=args.max_new_tokens
         )
 
-        if has_answer_after:
-            print(f"Risposta trovata nel documento {documents_with_answer_after}")
-            print(f"Prima risposta trovata: '{found_answer}'")
-        else:
-            print("Nessuna risposta trovata in nessuno dei documenti generati.")
-            print(f"La risposta era {answers}")
+        generated_answers = extract_generate_answers(args, generated_output)
+        print(f"La risposta generata dal modello e':\n{generated_answers}")
+        prompt_batch['generated_answer'] = generated_answers
+        all_info.append(prompt_batch)
 
-        result = {
-            "prompt": prompt,
-            "all_document_indices": document_indices,
-            "generated_indices": original_ids,
-            "has_answer_in_passed_documents": has_answer_before,
-            "documents_with_answer_in_passed_documents": documents_with_answer_before,
-            "generated_id_document_has_answer": has_answer_after,
-            "answer_in_the_document": found_answer,
-            "documents_with_answer_in_generated": documents_with_answer_after,
-            "answers_target": answers
-        }
-        all_info.append(result)
+        '''
+        if (idx + 1) % save_every == 0 or (idx + 1) == len(dataset):
+            print(f"Saving at {idx + 1}...")
+            file_name = f"{saving_dir}/numdoc{num_doc}_retr{args.num_retrieved_documents}{padding_str}{chat_template_str}_info_{idx+1}.pkl"
+            write_pickle(all_info, file_name)
+            all_info = []
+        '''
         
-    with open(json_file_path, "w", encoding="utf-8") as json_file:
-        json.dump(all_info, json_file, indent=4, ensure_ascii=False)
-
-    print(f"Risultati salvati in: {json_file_path}")
-
 
 def main():
     args = parse_arguments()
 
     args.split = "test" if args.use_test else "train"
 
-    print("Loading LLM...")
-    llm_id = args.llm_id
+    print("Loading BGM...")
+    bgm_id = args.bgm_id
     
     bgm = BGM(
-        llm_id, device, 
+        bgm_id, device, 
         quantization_bits=args.quantization_bits, 
-        model_max_length=args.model_max_length,
+        model_max_length=15,
     )
-    model= bgm.model
+    bgm_model= bgm.model
 
     tokenizer = bgm.tokenizer
-    model, tokenizer = setup_chat_format(model, tokenizer)
+    model, tokenizer = setup_chat_format(bgm_model, tokenizer)
+    print("BGM loaded")
+    
+    print("Loading LLM...")
+    llm_id = args.llm_id
+    llm = LLM(
+        llm_id, device, 
+        quantization_bits=args.quantization_bits, 
+        model_max_length=args.model_max_length
+    )
     print("LLM loaded")
 
     task_instruction = args.task_instruction
@@ -459,7 +438,7 @@ def main():
     print_info(args)
 
     training_path=r'C:\Users\franc\Documents\Bridge_the_GAP\data\SFT_training_bgm\meta-llama-Llama-3.2-1B\checkpoint-800'  #best checkpoint 700-800
-    generate_and_save(args, training_path, tokenizer, prompt_dataloader, num_examples=100, max_length=15)
+    generate_and_save(args, training_path, llm, tokenizer, prompt_dataloader, num_examples=10, max_length=15)
 
 
 
