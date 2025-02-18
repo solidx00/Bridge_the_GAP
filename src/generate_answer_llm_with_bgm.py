@@ -258,13 +258,13 @@ def reconstruct_prompt_from_ids(
     ]
 
     if not selected_documents:
-        return #nesun documento trovato
+        return #nessun documento trovato
 
     reconstructed_prompt = "\n".join(selected_documents)
 
-    final_prompt = (f"{task_instruction}\nQuestion:{query}\nDocuments:\n{reconstructed_prompt}\nAnswer:")
+    final_prompt = (f"{task_instruction}\nQuestion: {query}\nDocuments:\n{reconstructed_prompt}\nAnswer:")
 
-    final_prompt = re.sub(r'\n+', '\n', final_prompt).strip() + "\n"
+    final_prompt = re.sub(r'\n+', '\n', final_prompt).strip()
 
     return final_prompt
 
@@ -370,7 +370,7 @@ def generate_and_save(
         original_ids = extract_and_convert_answer_indices(generated_text, id_mapping)
 
         filtered_prompt = reconstruct_prompt_from_ids(original_ids, prompt)
-        print(filtered_prompt)
+        #print(filtered_prompt)
 
         generated_output = llm.generate(
             filtered_prompt,
