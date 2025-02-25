@@ -49,7 +49,7 @@ def parse_arguments(custom_args=None):
         'model_max_length': 4096,
         'quantization_bits': 4,
         'gold_position': None,
-        'use_model_chat_template': False, 
+        'use_model_chat_template': True, 
         'num_retrieved_documents': 5,
         'use_test': True,
         'padding_strategy': 'longest',
@@ -244,13 +244,13 @@ def reconstruct_prompt_from_ids(
     )
     documents_dict = {doc_id.strip(): full_text.strip() for full_text, doc_id in documents}
 
-    print(f"ID disponibili nel prompt: {list(documents_dict.keys())}")
+    #print(f"ID disponibili nel prompt: {list(documents_dict.keys())}")
 
     selected_ids = [id_.strip() for id_ in original_ids.split(",") if id_.strip()]
     
     valid_ids = [id_ for id_ in selected_ids if id_ in documents_dict]
 
-    print(f"ID validi generati dal modello: {valid_ids}")
+    #print(f"ID validi generati dal modello: {valid_ids}")
 
     selected_documents = [
         re.sub(r'Answer:\s*\n?', '', documents_dict[id_]) 
@@ -258,13 +258,16 @@ def reconstruct_prompt_from_ids(
     ]
 
     if not selected_documents:
-        return #nessun documento trovato
+
+        final_prompt = (f"{task_instruction}\nQuestion: {query}\nAnswer:\n")
+
+        return final_prompt
 
     reconstructed_prompt = "\n".join(selected_documents)
 
     final_prompt = (f"{task_instruction}\nQuestion: {query}\nDocuments:\n{reconstructed_prompt}\nAnswer:")
 
-    final_prompt = re.sub(r'\n+', '\n', final_prompt).strip()
+    final_prompt = re.sub(r'\n+', '\n', final_prompt).strip() + '\n'
 
     return final_prompt
 
@@ -332,24 +335,28 @@ def generate_and_save(
     # Create the saving directory
     llm_folder = llm_id.split("/")[1] if '/' in llm_id else llm_id
     saving_dir = f"{args.output_dir}/{args.dataset}/{llm_folder}/{args.split}/{prompt_type}/{retriever_str}/{num_doc}_doc"
-    #os.makedirs(saving_dir, exist_ok=True)
+    os.makedirs(saving_dir, exist_ok=True)
 
     # Load the trained model
     model = AutoModelForCausalLM.from_pretrained(model_weights_path)
     model.to(device)
     model.eval()
 
-    all_info = []  
+    all_info = []
+    start_idx = 1000  # Inizia dal 500° esempio
+    end_idx = 3000   # Termina al 1500° esempio 
     for idx, prompt_batch in enumerate(tqdm(dataset)):
-        if idx >= num_examples:
-            break
 
+        if idx < start_idx:
+            continue  # Salta fino al 500° esempio
+        if idx > end_idx:
+            break    # Interrompi dopo il 1500° esempio
+            
         prompt = prompt_batch['prompt'].replace('You are given a question and you must respond based on the provided documents. You must always provide an answer.', "")
         document_indices= prompt_batch['document_indices']
 
         # Mappa i document ID nel prompt
         modified_prompt, id_mapping = map_document_indices(prompt, document_indices)
-        print(f"Processing Example {idx+1}:\n")
 
         prompt_formatted = process_dataset(modified_prompt, args.task_instruction)
         prompt_formatted = tokenizer.apply_chat_template(
@@ -370,7 +377,6 @@ def generate_and_save(
         original_ids = extract_and_convert_answer_indices(generated_text, id_mapping)
 
         filtered_prompt = reconstruct_prompt_from_ids(original_ids, prompt)
-        #print(filtered_prompt)
 
         generated_output = llm.generate(
             filtered_prompt,
@@ -379,17 +385,19 @@ def generate_and_save(
         )
 
         generated_answers = extract_generate_answers(args, generated_output)
-        print(f"La risposta generata dal modello e':\n{generated_answers}")
+
+        prompt_batch['bgm_indices'] = original_ids
+        
         prompt_batch['generated_answer'] = generated_answers
+
         all_info.append(prompt_batch)
 
-        '''
         if (idx + 1) % save_every == 0 or (idx + 1) == len(dataset):
             print(f"Saving at {idx + 1}...")
             file_name = f"{saving_dir}/numdoc{num_doc}_retr{args.num_retrieved_documents}{padding_str}{chat_template_str}_info_{idx+1}.pkl"
             write_pickle(all_info, file_name)
             all_info = []
-        '''
+        
         
 
 def main():
@@ -403,7 +411,7 @@ def main():
     bgm = BGM(
         bgm_id, device, 
         quantization_bits=args.quantization_bits, 
-        model_max_length=15,
+        model_max_length=args.model_max_length,
     )
     bgm_model= bgm.model
 

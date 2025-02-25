@@ -91,6 +91,6 @@ task_templates = {
 chat_task_templates = {
     'google/gemma-2-2b-it': {
         "template": "<start_of_turn>user\n{task_instruction}{context_prompt}<end_of_turn>\n<start_of_turn>model",
-        "answer_prefix": "Answer:\nmodel",
+        "answer_prefix": "Answer:\n",
     },
 }
