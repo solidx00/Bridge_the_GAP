@@ -127,16 +127,16 @@ def read_generation_results(file_path: str, df: pd.DataFrame) -> List[Dict]:
             else:
                 answers = filtered_df.answers.iloc[0]
             
-            filtered_prompt = reconstruct_prompt_from_ids(bgm_indices, prompt)
+            #filtered_prompt = reconstruct_prompt_from_ids(bgm_indices, prompt)
 
             gold_in_retrieved = int(gold_document_idx) in map(int, documents_idx)
             ans_match_after_norm = are_answers_matching(generated_answer, answers) if answers else False
-            ans_in_documents = is_answer_in_text(filtered_prompt, answers) if answers else False
+            ans_in_documents = is_answer_in_text(prompt, answers) if answers else False
 
             data.append({
                 'example_id': str(example_id),
                 'query': query,
-                'prompt': filtered_prompt,
+                'prompt': prompt,
                 'bgm_indices': bgm_indices,
                 'document_indices': documents_idx,
                 'gold_document_idx': gold_document_idx,
@@ -288,6 +288,7 @@ def parse_arguments(custom_args=None):
     # Define default values
     default_args = {
         'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\gen_res_example_llm_with_bgm',
+        'steps_training': 1800,
         'llm_id': 'google/gemma-2-2b-it',
         'dataset': 'nq',
         'model_max_length': 4096,
@@ -335,12 +336,12 @@ def main():
     else:
         raise ValueError("Invalid prompt type")
 
-
+    steps_training = args.steps_training  # steps of training used 
     llm_id = args.llm_id
     split = "test" if args.use_test else "train"
     llm_folder = llm_id.split("/")[1] if '/' in llm_id else llm_id
     doc_str = f"{args.num_doc}_doc" if 'only_query' not in prompt_type else ""
-    directory = f'{args.output_dir}/{args.dataset}/{llm_folder}/{split}/{prompt_type}/{retriever_str}{doc_str}'
+    directory = f'{args.output_dir}/steps_{steps_training}/{args.dataset}/{llm_folder}/{split}/{prompt_type}/{retriever_str}{doc_str}'
     print("Directory: ", directory)
 
     df = pd.read_json(info[args.dataset][split], dtype={'example_id': str})

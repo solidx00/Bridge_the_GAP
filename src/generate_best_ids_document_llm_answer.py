@@ -73,7 +73,7 @@ def parse_arguments(custom_args=None):
     """
     # Define default values
     default_args = {
-        'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\gen_ids_document_training_set_bgm',
+        'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\gen_best_ids_document_training_set_bgm',
         'llm_id': 'google/gemma-2-2b-it',
         'dataset': 'nq_training',
         'model_max_length': 4096,

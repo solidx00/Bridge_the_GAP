@@ -41,7 +41,7 @@ def parse_arguments(custom_args=None):
         'dataset': 'nq',
         'model_max_length': 4096,
         'quantization_bits': 4,
-        'task_instruction' : "Output only the document IDs relevant to the query. Use this format: [Id_1, Id_2, ...].",
+        'task_instruction' : "Output only the IDs of the documents relevant to the query. Use this format: [Id_1, Id_2, ...]. If there is no relevant document, output NO_DOCS.",
         'use_test': False,
         'padding_strategy': 'longest',
         'max_new_tokens': 15,
@@ -185,11 +185,12 @@ def bgm_training(args, model, tokenizer, dataset):
     sft_config = SFTConfig(
         dataset_text_field="formatted_chat",  # Specify the field containing the conversation
         output_dir=args.output_dir,
-        max_steps=1000,  # Adjust based on dataset size and desired training duration
-        per_device_train_batch_size=4,  # Set according to your GPU memory capacity
-        learning_rate=5e-5,  # Common starting point for fine-tuning
-        logging_steps=10,  # Frequency of logging training metrics
-        save_steps=100,  # Frequency of saving model checkpoints
+        max_steps=3000,  
+        per_device_train_batch_size=4,  
+        learning_rate=5e-5,  
+        logging_steps=10, 
+        save_steps=100, 
+        weight_decay=0.01,  # Prevent overfitting
     )
 
     print("LoRA model configured.")
@@ -281,13 +282,17 @@ def main():
 
     print_info(args)
 
-    print(dataset_training['formatted_chat'][0])
-    print(dataset_testing['formatted_chat'][0])
+    #for i in range(15):
+        #print(f"Example {i+1}:")
+        #print(dataset_testing['formatted_chat'][i])  # Adjust key if necessary
+        #print("-" * 50)  # Separator for better readability
+
+    #print(dataset_testing['formatted_chat'][0])
 
     #bgm_training(args, model, bgm.tokenizer, dataset_training)
 
-    #training_path=r'C:\Users\franc\Documents\Bridge_the_GAP\data\SFT_training_bgm\meta-llama-Llama-3.2-1B\checkpoint-700'  #best checkpoint 700-800
-    #evaluate_model(training_path, bgm.tokenizer, dataset_testing, num_examples=20, max_length=15)
+    training_path=r'C:\Users\franc\Documents\Bridge_the_GAP\data\SFT_training_bgm\meta-llama-Llama-3.2-1B\checkpoint-3000'
+    evaluate_model(training_path, bgm.tokenizer, dataset_testing, num_examples=20, max_length=10)
 
 
 

@@ -41,7 +41,7 @@ def parse_arguments(custom_args=None):
     """
     # Define default values
     default_args = {
-        'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\gen_res_example_llm_with_bgm',
+        'output_dir': r'C:\Users\franc\Documents\Bridge_the_GAP\data\gen_best_ids_doc_test_set_according_bgm',
         'bgm_id': 'meta-llama/Llama-3.2-1B',
         'llm_id': 'google/gemma-2-2b-it',
         'dataset': 'nq',
@@ -210,7 +210,8 @@ def extract_and_convert_answer_indices(generated_output: str, id_mapping: dict) 
     answer_string = match.group(1).strip().split("<|im_end|>")[0].strip()
 
     # Dividi e converte gli ID
-    generated_ids = [id_.strip() for id_ in re.split(r'[\s,]+', answer_string) if id_.strip()]
+    #generated_ids = [id_.strip() for id_ in answer_string.split(",") if id_.strip()] #splitta solo con la ','
+    generated_ids = [id_.strip() for id_ in re.split(r'[\s,]+', answer_string) if id_.strip()]  #splitta anche con gli spazi
     original_ids = [inverse_mapping.get(id_, f"Unknown({id_})") for id_ in generated_ids]
 
     # Restituisci gli ID originali come stringa separata da virgole
@@ -263,31 +264,6 @@ def reconstruct_prompt_from_ids(
     
     return final_prompt
 
-def extract_generate_answers(
-    args: argparse.Namespace, 
-    generated_output: List[str]
-) -> List[str]:
-    answer_prefix = "Answer:"
-    if args.use_model_chat_template:
-        answer_prefix = '\n\nmodel'#re.escape(chat_task_templates[args.llm_id]['answer_prefix'])
-
-    generated_answers = []
-    for output in generated_output:
-        matches = list(re.finditer(answer_prefix, output))
-        match_idx = 0
-
-        # When using the proof there is a one-shot example that already 
-        # contains the string "Answer:". Thus, we should get the second (match_idx=1) match.
-        if args.use_task_with_proof:
-            match_idx = 1
-            if args.use_model_chat_template and answer_prefix != "Answer:":
-                match_idx = 0
- 
-        answer_end = matches[match_idx].end()
-        response = output[answer_end:].strip()
-        generated_answers.append(response)
-    
-    return generated_answers
 
 def print_info(args: argparse.Namespace):
     print("INFO:")    
@@ -295,7 +271,6 @@ def print_info(args: argparse.Namespace):
     print(f"TASK INSTRUCTION: {args.task_instruction}")
     print(f"USE TEST: {args.use_test}")
     print(f"BGM MODEL: {args.bgm_id}")
-    print(f"LLM MODEL: {args.llm_id}")
     print(f"MODEL MAX LENGTH: {args.model_max_length}")
     print(f'MAX NEW TOKENS: {args.max_new_tokens}')
     print(f"USE MODEL CHAT TEMPLATE: {args.use_model_chat_template}")
@@ -308,11 +283,10 @@ def print_info(args: argparse.Namespace):
 
 def generate_and_save(
     args: argparse.Namespace, 
-    model_weights_path,
-    steps_training: int,
-    llm: LLM, 
+    model_weights_path, 
     tokenizer,
     dataset,
+    steps_training: int,
     max_length=50
 ):
     
@@ -326,22 +300,18 @@ def generate_and_save(
 
     # Create the saving directory
     llm_folder = llm_id.split("/")[1] if '/' in llm_id else llm_id
-    saving_dir = f"{args.output_dir}/steps_{steps_training}/{args.dataset}/{llm_folder}/{args.split}/{prompt_type}/{retriever_str}/{num_doc}_doc"
+    saving_dir = f"{args.output_dir}/{args.dataset}/{llm_folder}/{args.split}/{prompt_type}/{retriever_str}/{num_doc}_doc"
     os.makedirs(saving_dir, exist_ok=True)
 
+    json_filename = f"{saving_dir}/numdoc{num_doc}_retr{args.num_retrieved_documents}{padding_str}{chat_template_str}_bgm_training_steps_{steps_training}_info.json"
+
+    # Load the trained model
     model = AutoModelForCausalLM.from_pretrained(model_weights_path)
     model.to(device)
     model.eval()
 
-    all_info = []
-    start_idx = 2000  # Inizia dal n° esempio
-    #end_idx = 3000   # Termina al n° esempio 
+    all_info = [] 
     for idx, prompt_batch in enumerate(tqdm(dataset)):
-        
-        if idx < start_idx:
-            continue
-        #if idx > end_idx:
-            #break
             
         prompt = prompt_batch['prompt'].replace('You are given a question and you must respond based on the provided documents. You must always provide an answer.', "")
         document_indices= prompt_batch['document_indices']
@@ -354,8 +324,10 @@ def generate_and_save(
             prompt_formatted, tokenize=False, add_generation_prompt=False, add_special_tokens=False
         )
 
+        # Tokenize the input
         inputs = tokenizer(prompt_formatted, return_tensors="pt", truncation=False).to(device)
 
+        # Generate the model's response
         with torch.no_grad():
             outputs = model.generate(**inputs, max_new_tokens=max_length, num_beams=5)
 
@@ -367,25 +339,17 @@ def generate_and_save(
 
         filtered_prompt = reconstruct_prompt_from_ids(original_ids, prompt)
 
-        generated_output = llm.generate(
-            filtered_prompt,
-            padding_strategy=args.padding_strategy, 
-            max_new_tokens=args.max_new_tokens
-        )
-
-        generated_answers = extract_generate_answers(args, generated_output)
-
         prompt_batch['bgm_indices'] = original_ids
-        prompt_batch['prompt'] = filtered_prompt
-        prompt_batch['generated_answer'] = generated_answers
-
-        all_info.append(prompt_batch)
         
-        if (idx + 1) % save_every == 0 or (idx + 1) == len(dataset):
-            print(f"Saving at {idx + 1}...")
-            file_name = f"{saving_dir}/numdoc{num_doc}_retr{args.num_retrieved_documents}{padding_str}{chat_template_str}_info_{idx+1}.pkl"
-            write_pickle(all_info, file_name)
-            all_info = []
+        prompt_batch['prompt'] = filtered_prompt
+        
+        all_info.append(prompt_batch)
+
+    # Salvataggio finale in un unico file JSON
+    print(f"Saving all data in a single JSON file: {json_filename}")
+    with open(json_filename, "w", encoding="utf-8") as f:
+        json.dump(all_info, f, ensure_ascii=False, indent=4)
+        
         
 
 def main():
@@ -406,15 +370,6 @@ def main():
     tokenizer = bgm.tokenizer
     model, tokenizer = setup_chat_format(bgm_model, tokenizer)
     print("BGM loaded")
-    
-    print("Loading LLM...")
-    llm_id = args.llm_id
-    llm = LLM(
-        llm_id, device, 
-        quantization_bits=args.quantization_bits, 
-        model_max_length=args.model_max_length
-    )
-    print("LLM loaded")
 
     task_instruction = args.task_instruction
 
@@ -433,8 +388,8 @@ def main():
 
     print_info(args)
 
-    training_path=r'C:\Users\franc\Documents\Bridge_the_GAP\data\SFT_training_bgm\meta-llama-Llama-3.2-1B\checkpoint-1800'
-    generate_and_save(args, training_path, 1800, llm, tokenizer, prompt_dataloader, max_length=15)
+    training_path=r'C:\Users\franc\Documents\Bridge_the_GAP\data\SFT_training_bgm\meta-llama-Llama-3.2-1B\checkpoint-1700'
+    generate_and_save(args, training_path, tokenizer, prompt_dataloader, steps_training=1700, max_length=15)
 
 
 
