@@ -66,7 +66,7 @@ def apply_chat_task_template(
 
 task_instructions = {
     "query_only": "You are given a question and you must respond based on your internal knowledge. You must always provide an answer.",
-    "nq": "You are given a question and you must respond based on the provided documents. You must always provide an answer.",
+    "nq": "You are given a question and you must respond based on the provided documents. Respond directly without providing any premise or explanation. If none of the documents contain the answer, please respond with NO-RESPONSE. Do not try to respond based on your own knowledge.",
     "nq_training": "You are given a question and you must respond based on the provided documents. You must always provide an answer.",
     "nq_bgm": "Output only the document IDs relevant to the query. Use this format: [ID1, ID2, ...].",
     "qa_proof": { 
@@ -91,6 +91,6 @@ task_templates = {
 chat_task_templates = {
     'google/gemma-2-2b-it': {
         "template": "<start_of_turn>user\n{task_instruction}{context_prompt}<end_of_turn>\n<start_of_turn>model",
-        "answer_prefix": "Answer\n",
+        "answer_prefix": "Answer:\nmodel",
     },
 }

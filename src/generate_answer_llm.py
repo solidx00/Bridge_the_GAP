@@ -214,13 +214,12 @@ def generate_and_save(
         generated_answers = extract_generate_answers(args, generated_output)
         prompt_batch['generated_answer'] = generated_answers
         all_info.append(prompt_batch)
-        
+
         if (idx + 1) % save_every == 0 or (idx + 1) == len(prompt_dataloader):
             print(f"Saving at {idx + 1}...")
             file_name = f"{saving_dir}/numdoc{num_doc}_retr{args.num_retrieved_documents}{padding_str}{chat_template_str}_info_{idx+1}.pkl"
             write_pickle(all_info, file_name)
             all_info = []
-
 
 def main():
     args = parse_arguments()

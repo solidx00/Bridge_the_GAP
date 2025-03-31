@@ -219,7 +219,7 @@ def extract_and_convert_answer_indices(generated_output: str, id_mapping: dict) 
 def reconstruct_prompt_from_ids(
     original_ids: str,
     prompt: str,
-    task_instruction: str = "You are given a question and you must respond based on the provided documents. You must always provide an answer."
+    task_instruction: str = "You are given a question and you must respond based on the provided documents. Respond directly without providing any premise or explanation. If none of the documents contain the answer, please respond with NO-RESPONSE. Do not try to respond based on your own knowledge."
 ) -> str:
     """
     Ricostruisce il prompt originale utilizzando solo i documenti selezionati dal modello,

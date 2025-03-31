@@ -40,6 +40,43 @@ def extract_proof_from_text(text: str) -> str:
 def compute_df_accuracy(df: pd.DataFrame, attribute: str) -> float:
     return round(df[attribute].sum() / len(df), 4) * 100
 
+def contains_no_res(text: str) -> bool:
+    NO_RES_PATTERNS = [ 
+        "NO-RES",
+        "any of the provided document",
+        "any of the document",
+        "None of the provided document",
+        "None of the document",
+        "No res",
+        "NO RESULT FOUND",
+        "NO RESPONSE",
+        "NO-RESPONSE",
+        "No answer found",
+        "do not know the answer",
+        "don't know the answer",
+        "do not provide information",
+        "does not provide any information",
+        "no direct answer",
+        "not explicitly stated in the given document",
+    ]
+    return any(pattern.lower() in text.lower() for pattern in NO_RES_PATTERNS)
+
+def compute_custom_accuracy(df: pd.DataFrame) -> float:
+    correct_count = 0
+
+    for _, row in df.iterrows():
+        ans_in_documents = row['ans_in_documents']
+        generated_answer = row['generated_answer']
+        ans_match_after_norm = row['ans_match_after_norm']
+
+        if (ans_in_documents and ans_match_after_norm):
+            correct_count += 1
+        elif (not ans_in_documents and contains_no_res(generated_answer)):
+            correct_count += 1
+        # all other cases are incorrect, do nothing
+
+    return round(correct_count / len(df), 4) * 100
+
 
 def read_generation_results(file_path: str, df: pd.DataFrame) -> List[Dict]:
     data = []
@@ -74,6 +111,10 @@ def read_generation_results(file_path: str, df: pd.DataFrame) -> List[Dict]:
             ans_match_after_norm = are_answers_matching(generated_answer, answers) if answers else False
             ans_in_documents = is_answer_in_text(prompt, answers) if answers else False
 
+            # Modifica per gestire i casi NO-RESPONSE
+            is_no_res = contains_no_res(generated_answer)
+            is_correct = (ans_in_documents and ans_match_after_norm) or (not ans_in_documents and is_no_res)
+
             data.append({
                 'example_id': str(example_id),
                 'query': query,
@@ -85,6 +126,8 @@ def read_generation_results(file_path: str, df: pd.DataFrame) -> List[Dict]:
                 'ans_match_after_norm': ans_match_after_norm,
                 'gold_in_retrieved': gold_in_retrieved,
                 'ans_in_documents': ans_in_documents,
+                'is_no_res': is_no_res,
+                'is_correct': is_correct,
                 "prompt_tokens_len": prompt_tokens_len,
             })
 
@@ -233,7 +276,7 @@ def parse_arguments(custom_args=None):
         'model_max_length': 4096,
         'use_model_chat_template': True, 
         'gold_position': None,
-        'num_retrieved_documents': 4,
+        'num_retrieved_documents': 5,
         'use_test': True,
         'padding_strategy': 'longest',
         'max_new_tokens': 50,
@@ -296,8 +339,14 @@ def main():
         results = read_generation_results(data_path, df)
 
     results_df = pd.DataFrame(results)
-    accuracy = compute_df_accuracy(results_df, 'ans_match_after_norm')
-    print("ACCURACY: ", accuracy)
+
+    #accuracy = compute_df_accuracy(results_df, 'ans_match_after_norm')
+    #print("ACCURACY: ", accuracy)
+
+    # New accuracy computing
+    accuracy = compute_custom_accuracy(results_df)
+    print("CUSTOM ACCURACY: ", accuracy)
+    
     if 'proof' in directory:
         accuracy_ans_in_proof = compute_df_accuracy(results_df, 'ans_in_proof')
         print("ACCURACY ANS IN PROOF", accuracy_ans_in_proof)
