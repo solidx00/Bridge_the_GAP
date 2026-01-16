@@ -1,9 +1,7 @@
 # Bridging the Preference Gap between Retrievers and LLMs (BGM) 🌉
 
-![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![Model](https://img.shields.io/badge/Model-Llama--3.2--1B-orange.svg)
-![Academic Year](https://img.shields.io/badge/Academic%20Year-2024%2F2025-red.svg)
 
 ---
 
